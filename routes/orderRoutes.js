@@ -6,31 +6,44 @@ import {
   getInvoice,
   getOrderStatus,
   getMockCheckout,
-  paymentCallback
+  paymentCallback,
+  getAllOrders,
+  updateOrderStatus,
+  updateOrderPaymentStatus,
+  updateOrderDeliveryStatus,
+  getCustomOrders,
+  createCustomOrder,
+  updateCustomOrder,
+  getRequestedOrders,
+  createRequestedOrder,
+  updateRequestedOrder
 } from '../controllers/orderController.js';
 
 const router = express.Router();
 
-// Order creation
+// --- Regular Standard Orders ---
 router.post('/', createOrder);
-
-// Payment verification
+router.get('/', getAllOrders); // Fetch all standard orders
 router.post('/verify', verifyPayment);
-
-// Fetch multiple orders (guest tracking using locally stored IDs)
 router.post('/by-ids', getOrdersByIds);
-
-// Invoice page retrieval
 router.get('/:orderId/invoice', getInvoice);
-
-// NEW ENDPOINTS FOR DYNAMIC HOSTED PAYMENTS
-// Polling status
 router.get('/:orderId/status', getOrderStatus);
-
-// Render Mock Hosted Checkout Fallback page
 router.get('/mock-checkout/:orderId', getMockCheckout);
-
-// Razorpay standard checkout callback
 router.get('/callback', paymentCallback);
+
+// --- Operational updates ---
+router.put('/:orderId/status', updateOrderStatus); // Update order confirmed/cancelled status
+router.put('/:orderId/payment', updateOrderPaymentStatus); // Update payment pending/success/cash
+router.put('/:orderId/delivery', updateOrderDeliveryStatus); // Update delivery checkpoint status
+
+// --- Custom Orders ---
+router.get('/custom/all', getCustomOrders); // Fetch all custom orders
+router.post('/custom', createCustomOrder); // Create new custom order request
+router.put('/custom/:id', updateCustomOrder); // Update quote/status
+
+// --- Requested Orders ---
+router.get('/requested/all', getRequestedOrders); // Fetch all out-of-stock requested orders
+router.post('/requested', createRequestedOrder); // Submit new out-of-stock request
+router.put('/requested/:id', updateRequestedOrder); // Update status (Confirmed/Cancelled)
 
 export default router;

@@ -986,3 +986,331 @@ export const paymentCallback = async (req, res) => {
     return res.status(500).send('<h1>Internal Server Error confirming payment</h1>');
   }
 };
+
+// =========================================================================
+// INTERNAL OPERATIONS ENDPOINTS (ADMIN & SUPERVISOR REST API)
+// =========================================================================
+
+// Retrieve all regular orders with items
+export const getAllOrders = async (req, res) => {
+  const queryText = `
+    SELECT o.id, o.recipient_name AS "recipientName", o.recipient_phone AS "recipientPhone",
+           o.delivery_address AS "deliveryAddress", o.gift_message AS "giftMessage",
+           o.items_subtotal AS "itemsSubtotal", o.addons_subtotal AS "addonsSubtotal",
+           o.delivery_total AS "deliveryTotal", o.grand_total AS "grandTotal",
+           o.payment_method AS "paymentMethod", o.payment_status AS "paymentStatus",
+           o.delivery_status AS "deliveryStatus", o.created_at AS "createdAt",
+           COALESCE(
+             json_agg(
+               json_build_object(
+                 'productName', oi.product_title,
+                 'quantity', oi.quantity,
+                 'price', oi.price,
+                 'deliveryDate', oi.delivery_date,
+                 'deliverySlot', oi.delivery_slot,
+                 'addons', oi.addons
+               )
+             ) FILTER (WHERE oi.id IS NOT NULL),
+             '[]'
+           ) AS items
+    FROM orders o
+    LEFT JOIN order_items oi ON o.id = oi.order_id
+    GROUP BY o.id
+    ORDER BY o.created_at DESC;
+  `;
+
+  try {
+    const result = await pool.query(queryText);
+    
+    // Map order fields to match frontend properties
+    const mapped = result.rows.map(row => ({
+      id: row.id,
+      customerName: row.recipientName,
+      customerEmail: row.recipientName.toLowerCase().replace(/\s+/g, '') + '@example.com',
+      totalAmount: parseFloat(row.grandTotal),
+      orderDate: row.createdAt,
+      status: row.paymentStatus === 'paid' || row.paymentStatus === 'success' ? 'Confirmed' : 'Pending',
+      paymentStatus: row.paymentStatus === 'paid' ? 'Paid' : row.paymentStatus === 'refunded' ? 'Refunded' : 'Unpaid',
+      deliveryAddress: row.deliveryAddress,
+      items: row.items.map(it => ({
+        productName: it.productName,
+        quantity: parseInt(it.quantity, 10),
+        price: parseFloat(it.price)
+      }))
+    }));
+
+    return res.status(200).json({
+      success: true,
+      orders: mapped
+    });
+  } catch (err) {
+    console.error('Error fetching all orders for admin:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve order listings.',
+      error: err.message
+    });
+  }
+};
+
+// Manually update order status (Confirmed or Cancelled)
+export const updateOrderStatus = async (req, res) => {
+  const { orderId } = req.params;
+  const { status } = req.body; // e.g. 'Confirmed' or 'Cancelled'
+
+  if (!status) {
+    return res.status(400).json({ success: false, message: 'Status parameter is required.' });
+  }
+
+  // Map Confirmed/Cancelled status to delivery_status and payment_status in database
+  const deliveryStatus = status === 'Confirmed' ? 'order confirmed' : 'cancelled';
+  let paymentStatusQuery = '';
+  if (status === 'Cancelled') {
+    paymentStatusQuery = ", payment_status = 'refunded'";
+  } else if (status === 'Confirmed') {
+    paymentStatusQuery = ", payment_status = 'paid'";
+  }
+
+  try {
+    const queryText = `
+      UPDATE orders
+      SET delivery_status = $1 ${paymentStatusQuery}
+      WHERE id = $2
+      RETURNING *;
+    `;
+    const result = await pool.query(queryText, [deliveryStatus, orderId]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+    return res.status(200).json({
+      success: true,
+      message: `Order status updated to ${status}.`,
+      order: result.rows[0]
+    });
+  } catch (err) {
+    console.error('Error updating order status:', err);
+    return res.status(500).json({ success: false, message: 'Failed to update order status.', error: err.message });
+  }
+};
+
+// Manually update payment status (pending, success, Cash)
+export const updateOrderPaymentStatus = async (req, res) => {
+  const { orderId } = req.params;
+  const { paymentStatus } = req.body; // 'pending', 'success', 'cash'
+
+  if (!paymentStatus) {
+    return res.status(400).json({ success: false, message: 'Payment status parameter is required.' });
+  }
+
+  // Convert success to 'paid' in DB, cash/pending as is
+  const dbStatus = paymentStatus === 'success' ? 'paid' : paymentStatus.toLowerCase();
+
+  try {
+    const queryText = `
+      UPDATE orders
+      SET payment_status = $1
+      WHERE id = $2
+      RETURNING *;
+    `;
+    const result = await pool.query(queryText, [dbStatus, orderId]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+    return res.status(200).json({
+      success: true,
+      message: `Payment status updated to ${paymentStatus}.`,
+      order: result.rows[0]
+    });
+  } catch (err) {
+    console.error('Error updating payment status:', err);
+    return res.status(500).json({ success: false, message: 'Failed to update payment status.', error: err.message });
+  }
+};
+
+// Update delivery status (10 specific statuses)
+export const updateOrderDeliveryStatus = async (req, res) => {
+  const { orderId } = req.params;
+  const { deliveryStatus } = req.body; // order confirmed, shipped, dispatched, received to motherhub, received to delivery hub, out for delivery, delivery rescheduled, out for pickup, delivered, cancelled
+
+  if (!deliveryStatus) {
+    return res.status(400).json({ success: false, message: 'Delivery status parameter is required.' });
+  }
+
+  try {
+    const queryText = `
+      UPDATE orders
+      SET delivery_status = $1
+      WHERE id = $2
+      RETURNING *;
+    `;
+    const result = await pool.query(queryText, [deliveryStatus, orderId]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+    return res.status(200).json({
+      success: true,
+      message: `Delivery status updated to ${deliveryStatus}.`,
+      order: result.rows[0]
+    });
+  } catch (err) {
+    console.error('Error updating delivery status:', err);
+    return res.status(500).json({ success: false, message: 'Failed to update delivery status.', error: err.message });
+  }
+};
+
+// --- CUSTOM ORDERS CONTROLLERS ---
+
+// Get all custom orders
+export const getCustomOrders = async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM custom_orders ORDER BY created_at DESC');
+    const mapped = result.rows.map(row => ({
+      id: row.id,
+      customerName: row.customer_name,
+      customerEmail: row.customer_email,
+      category: row.category,
+      description: row.description,
+      referenceImageUrl: row.reference_image_url || '',
+      budget: parseFloat(row.budget),
+      requiredDate: row.required_date,
+      status: row.status,
+      calculatedCost: row.calculated_cost ? parseFloat(row.calculated_cost) : null,
+      requestedAt: row.created_at
+    }));
+    return res.status(200).json({ success: true, customOrders: mapped });
+  } catch (err) {
+    console.error('Error getting custom orders:', err);
+    return res.status(500).json({ success: false, message: 'Failed to retrieve custom orders.', error: err.message });
+  }
+};
+
+// Create custom order request
+export const createCustomOrder = async (req, res) => {
+  const { customerName, customerEmail, category, description, referenceImageUrl, budget, requiredDate } = req.body;
+  if (!customerName || !customerEmail || !category || !description || !budget || !requiredDate) {
+    return res.status(400).json({ success: false, message: 'Missing required custom order parameters.' });
+  }
+
+  const id = 'CUST-' + Math.floor(1000 + Math.random() * 9000);
+
+  try {
+    const queryText = `
+      INSERT INTO custom_orders (id, customer_name, customer_email, category, description, reference_image_url, budget, required_date, status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'Pending Review')
+      RETURNING *;
+    `;
+    const result = await pool.query(queryText, [id, customerName, customerEmail, category, description, referenceImageUrl || null, budget, new Date(requiredDate)]);
+    return res.status(201).json({ success: true, message: 'Custom order request created!', customOrder: result.rows[0] });
+  } catch (err) {
+    console.error('Error creating custom order:', err);
+    return res.status(500).json({ success: false, message: 'Failed to create custom order.', error: err.message });
+  }
+};
+
+// Update custom order status or calculated quote
+export const updateCustomOrder = async (req, res) => {
+  const { id } = req.params;
+  const { status, calculatedCost } = req.body;
+
+  let queryText = 'UPDATE custom_orders SET ';
+  const values = [];
+  let paramIndex = 1;
+
+  if (status !== undefined) {
+    queryText += 'status = $' + paramIndex + ', ';
+    values.push(status);
+    paramIndex++;
+  }
+  if (calculatedCost !== undefined) {
+    queryText += 'calculated_cost = $' + paramIndex + ', ';
+    values.push(calculatedCost);
+    paramIndex++;
+  }
+
+  // Remove trailing comma and space
+  queryText = queryText.slice(0, -2);
+  queryText += ' WHERE id = $' + paramIndex + ' RETURNING *;';
+  values.push(id);
+
+  try {
+    const result = await pool.query(queryText, values);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'Custom order not found.' });
+    }
+    return res.status(200).json({ success: true, message: 'Custom order updated successfully!', customOrder: result.rows[0] });
+  } catch (err) {
+    console.error('Error updating custom order:', err);
+    return res.status(500).json({ success: false, message: 'Failed to update custom order.', error: err.message });
+  }
+};
+
+// --- REQUESTED ORDERS CONTROLLERS ---
+
+// Get all requested orders
+export const getRequestedOrders = async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM requested_orders ORDER BY created_at DESC');
+    const mapped = result.rows.map(row => ({
+      id: row.id,
+      customerName: row.customer_name,
+      customerEmail: row.customer_email,
+      productId: row.product_id,
+      productTitle: row.product_title,
+      quantity: row.quantity,
+      notes: row.notes || '',
+      budget: parseFloat(row.budget),
+      status: row.status,
+      createdAt: row.created_at
+    }));
+    return res.status(200).json({ success: true, requestedOrders: mapped });
+  } catch (err) {
+    console.error('Error getting requested orders:', err);
+    return res.status(500).json({ success: false, message: 'Failed to retrieve requested orders.', error: err.message });
+  }
+};
+
+// Create requested order request
+export const createRequestedOrder = async (req, res) => {
+  const { customerName, customerEmail, productId, productTitle, quantity, notes, budget } = req.body;
+  if (!customerName || !customerEmail || !productId || !productTitle || !budget) {
+    return res.status(400).json({ success: false, message: 'Missing required parameters.' });
+  }
+
+  const id = 'REQ-' + Math.floor(1000 + Math.random() * 9000);
+
+  try {
+    const queryText = `
+      INSERT INTO requested_orders (id, customer_name, customer_email, product_id, product_title, quantity, notes, budget, status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'Pending')
+      RETURNING *;
+    `;
+    const result = await pool.query(queryText, [id, customerName, customerEmail, productId, productTitle, quantity || 1, notes || null, budget]);
+    return res.status(201).json({ success: true, message: 'Requested order submitted!', requestedOrder: result.rows[0] });
+  } catch (err) {
+    console.error('Error creating requested order:', err);
+    return res.status(500).json({ success: false, message: 'Failed to create requested order.', error: err.message });
+  }
+};
+
+// Update requested order status
+export const updateRequestedOrder = async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  if (!status) {
+    return res.status(400).json({ success: false, message: 'Status is required.' });
+  }
+
+  try {
+    const result = await pool.query('UPDATE requested_orders SET status = $1 WHERE id = $2 RETURNING *', [status, id]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: 'Requested order not found.' });
+    }
+    return res.status(200).json({ success: true, message: 'Requested order status updated!', requestedOrder: result.rows[0] });
+  } catch (err) {
+    console.error('Error updating requested order:', err);
+    return res.status(500).json({ success: false, message: 'Failed to update requested order status.', error: err.message });
+  }
+};
+
+

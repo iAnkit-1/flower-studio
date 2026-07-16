@@ -29,7 +29,9 @@ export const createProduct = async (req, res) => {
     tags,
     addons,
     occasions,
-    images
+    images,
+    addOns,
+    similarItems
   } = req.body;
 
   if (!title || mrp === undefined || salePrice === undefined || !category || !subCategory || !availability || stock === undefined) {
@@ -70,13 +72,13 @@ export const createProduct = async (req, res) => {
     INSERT INTO products (
       id, hsn_code, barcode, sku, title, description, mrp, sale_price, 
       discount_percentage, ratings, reviews_count, category, sub_category, 
-      availability, stock, tags, addons, occasions, images
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+      availability, stock, tags, addons, occasions, images, add_ons, similar_items
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
     RETURNING *;
   `;
 
   const values = [
-    id,
+    id || `PROD-${Math.floor(1000 + Math.random() * 9000)}`,
     hsnCode || '',
     barcode || '',
     sku || '',
@@ -94,7 +96,9 @@ export const createProduct = async (req, res) => {
     tags || [],
     addons || {},
     occasions || [],
-    uploadedUrls
+    uploadedUrls,
+    addOns || [],
+    similarItems || []
   ];
 
   try {
@@ -139,7 +143,9 @@ export const getAllProducts = async (req, res) => {
       tags: row.tags || [],
       addons: row.addons || {},
       occasions: row.occasions || [],
-      images: row.images || []
+      images: row.images || [],
+      addOns: row.add_ons || [],
+      similarItems: row.similar_items || []
     }));
 
     return res.status(200).json({
@@ -151,6 +157,148 @@ export const getAllProducts = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch product list.',
+      error: err.message
+    });
+  }
+};
+
+// Update an existing product
+export const updateProduct = async (req, res) => {
+  const { id } = req.params;
+  const {
+    hsnCode,
+    barcode,
+    sku,
+    title,
+    description,
+    mrp,
+    salePrice,
+    discountPercentage,
+    ratings,
+    reviewsCount,
+    category,
+    subCategory,
+    availability,
+    stock,
+    tags,
+    addons,
+    occasions,
+    images,
+    addOns,
+    similarItems
+  } = req.body;
+
+  if (!title || mrp === undefined || salePrice === undefined || !category || !subCategory || !availability || stock === undefined) {
+    return res.status(400).json({
+      success: false,
+      message: 'Missing required product parameters for update.'
+    });
+  }
+
+  // Handle Cloudinary Image Uploads for Base64 Strings
+  const uploadedUrls = [];
+  try {
+    if (images && Array.isArray(images)) {
+      for (const img of images) {
+        if (img.startsWith('data:image') || img.length > 1000) {
+          console.log('Uploading base64 image to Cloudinary...');
+          const uploadResult = await cloudinary.uploader.upload(img, {
+            folder: 'flower_studio'
+          });
+          uploadedUrls.push(uploadResult.secure_url);
+        } else {
+          uploadedUrls.push(img);
+        }
+      }
+    }
+  } catch (uploadError) {
+    console.error('Cloudinary upload failure:', uploadError);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to upload images to Cloudinary for update.',
+      error: uploadError.message
+    });
+  }
+
+  const queryText = `
+    UPDATE products
+    SET hsn_code = $1, barcode = $2, sku = $3, title = $4, description = $5, 
+        mrp = $6, sale_price = $7, discount_percentage = $8, ratings = $9, 
+        reviews_count = $10, category = $11, sub_category = $12, availability = $13, 
+        stock = $14, tags = $15, addons = $16, occasions = $17, images = $18, 
+        add_ons = $19, similar_items = $20
+    WHERE id = $21
+    RETURNING *;
+  `;
+
+  const values = [
+    hsnCode || '',
+    barcode || '',
+    sku || '',
+    title,
+    description || '',
+    mrp,
+    salePrice,
+    discountPercentage || 0.0,
+    ratings || 4.5,
+    reviewsCount || 0,
+    category,
+    subCategory,
+    availability,
+    stock,
+    tags || [],
+    addons || {},
+    occasions || [],
+    uploadedUrls,
+    addOns || [],
+    similarItems || [],
+    id
+  ];
+
+  try {
+    const result = await db.query(queryText, values);
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Product not found.'
+      });
+    }
+    return res.status(200).json({
+      success: true,
+      message: 'Product successfully updated!',
+      product: result.rows[0]
+    });
+  } catch (err) {
+    console.error('Error updating product record:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update product record in database.',
+      error: err.message
+    });
+  }
+};
+
+// Delete a product
+export const deleteProduct = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await db.query('DELETE FROM products WHERE id = $1 RETURNING *', [id]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Product not found.'
+      });
+    }
+    return res.status(200).json({
+      success: true,
+      message: 'Product successfully deleted from database!'
+    });
+  } catch (err) {
+    console.error('Error deleting product record:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete product from database.',
       error: err.message
     });
   }
