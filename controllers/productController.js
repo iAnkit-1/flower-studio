@@ -303,3 +303,33 @@ export const deleteProduct = async (req, res) => {
     });
   }
 };
+
+// Upload base64 image directly to Cloudinary
+export const uploadImage = async (req, res) => {
+  const { image } = req.body;
+  if (!image) {
+    return res.status(400).json({
+      success: false,
+      message: 'No image data provided.'
+    });
+  }
+
+  try {
+    console.log('Uploading base64 image directly to Cloudinary...');
+    const uploadResult = await cloudinary.uploader.upload(image, {
+      folder: 'flower_studio'
+    });
+    console.log(`Cloudinary direct upload success: ${uploadResult.secure_url}`);
+    return res.json({
+      success: true,
+      url: uploadResult.secure_url
+    });
+  } catch (error) {
+    console.error('Cloudinary direct upload failure:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to upload image directly to Cloudinary.',
+      error: error.message
+    });
+  }
+};
