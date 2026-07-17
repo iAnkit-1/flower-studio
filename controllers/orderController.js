@@ -1003,6 +1003,8 @@ export const getAllOrders = async (req, res) => {
            COALESCE(
              json_agg(
                json_build_object(
+                 'productId', oi.product_id,
+                 'productImage', oi.product_image,
                  'productName', oi.product_title,
                  'quantity', oi.quantity,
                  'price', oi.price,
@@ -1033,6 +1035,8 @@ export const getAllOrders = async (req, res) => {
       paymentStatus: row.paymentStatus === 'paid' ? 'Paid' : row.paymentStatus === 'refunded' ? 'Refunded' : 'Unpaid',
       deliveryAddress: row.deliveryAddress,
       items: row.items.map(it => ({
+        productId: it.productId,
+        productImage: it.productImage,
         productName: it.productName,
         quantity: parseInt(it.quantity, 10),
         price: parseFloat(it.price)
