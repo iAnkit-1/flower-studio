@@ -1,6 +1,50 @@
 import db from '../config/db.js';
+import https from 'https';
 
-// Send OTP to user's mobile number
+// Helper to make HTTPS requests to Fast2SMS API
+const makeFast2SMSRequest = (path, postData) => {
+  return new Promise((resolve, reject) => {
+    const apiKey = process.env.FAST2SMS_API_KEY;
+    if (!apiKey) {
+      return resolve({ success: false, message: 'FAST2SMS_API_KEY is not configured in .env' });
+    }
+
+    const payload = JSON.stringify(postData);
+    const req = https.request({
+      hostname: 'www.fast2sms.com',
+      path: path,
+      method: 'POST',
+      headers: {
+        'authorization': apiKey,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload)
+      }
+    }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => body += chunk);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(body);
+          console.log(`[Fast2SMS Response] ${path}:`, parsed);
+          resolve(parsed);
+        } catch (e) {
+          console.error('[Fast2SMS Parse Error]:', body);
+          resolve({ return: false, message: 'Invalid response from Fast2SMS' });
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      console.error('[Fast2SMS Request Error]:', err.message);
+      reject(err);
+    });
+
+    req.write(payload);
+    req.end();
+  });
+};
+
+// 1. Send OTP (Fast2SMS /dev/otp/send + Firestore session sync)
 export const sendOtp = async (req, res) => {
   const { phoneNumber } = req.body;
 
@@ -12,33 +56,54 @@ export const sendOtp = async (req, res) => {
   }
 
   const cleanPhone = phoneNumber.trim();
-  const generatedOtp = '123456';
+  const mobile10Digits = cleanPhone.replace(/\D/g, '').slice(-10);
+
+  if (mobile10Digits.length !== 10) {
+    return res.status(400).json({
+      success: false,
+      message: 'Please provide a valid 10-digit Indian mobile number.'
+    });
+  }
+
+  const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
   try {
+    // 1. Save session to Firestore otp_sessions
     if (db) {
-      try {
-        await db.collection('otp_sessions').doc(cleanPhone).set({
-          phoneNumber: cleanPhone,
-          otp: generatedOtp,
-          expiresAt,
-          createdAt: new Date().toISOString()
-        });
-      } catch (dbErr) {
-        console.warn('Firestore write warning in sendOtp (ignoring until database enabled in console):', dbErr.message);
-      }
+      await db.collection('otp_sessions').doc(cleanPhone).set({
+        phoneNumber: cleanPhone,
+        mobile: mobile10Digits,
+        otp: generatedOtp,
+        expiresAt,
+        createdAt: new Date().toISOString()
+      });
     }
 
-    console.log(`OTP generated for ${cleanPhone}: ${generatedOtp}`);
+    console.log(`[SEND OTP] Mobile: ${mobile10Digits} | Code: ${generatedOtp}`);
+
+    // 2. Trigger Fast2SMS /dev/otp/send if API Key & OTP ID present
+    let smsResult = null;
+    if (process.env.FAST2SMS_API_KEY) {
+      const otpId = process.env.FAST2SMS_OTP_ID || 'flower_studio_otp';
+      smsResult = await makeFast2SMSRequest('/dev/otp/send', {
+        mobile: mobile10Digits,
+        otp_id: otpId,
+        otp: generatedOtp,
+        otp_expiry: 10,
+        otp_length: 6
+      });
+    }
 
     return res.status(200).json({
       success: true,
-      message: `OTP sent successfully to ${cleanPhone}.`,
+      message: smsResult?.message || `OTP generated and sent to +91 ${mobile10Digits}.`,
       otp: generatedOtp,
-      expiresAt
+      expiresAt,
+      fast2sms: smsResult
     });
   } catch (error) {
-    console.error('Error sending OTP:', error);
+    console.error('Error in sendOtp:', error);
     return res.status(500).json({
       success: false,
       message: 'Failed to send OTP.',
@@ -47,7 +112,7 @@ export const sendOtp = async (req, res) => {
   }
 };
 
-// Verify OTP and signup/login user profile in Firestore
+// 2. Verify OTP (Fast2SMS /dev/otp/verify + Firestore otp_sessions verification)
 export const verifyOtp = async (req, res) => {
   const { phoneNumber, otp, fullName, email } = req.body;
 
@@ -59,31 +124,59 @@ export const verifyOtp = async (req, res) => {
   }
 
   const cleanPhone = phoneNumber.trim();
+  const mobile10Digits = cleanPhone.replace(/\D/g, '').slice(-10);
+  const enteredOtp = otp.toString().trim();
 
   try {
-    if (db) {
+    let isValidOtp = false;
+
+    // A. Check Fast2SMS verify API first if configured
+    if (process.env.FAST2SMS_API_KEY) {
       try {
-        const otpSnap = await db.collection('otp_sessions').doc(cleanPhone).get();
-        if (otpSnap.exists) {
-          const otpData = otpSnap.data();
-          if (otpData.otp !== otp && otp !== '123456') {
-            return res.status(400).json({
-              success: false,
-              message: 'Invalid OTP entered.'
-            });
-          }
+        const smsVerifyRes = await makeFast2SMSRequest('/dev/otp/verify', {
+          mobile: mobile10Digits,
+          otp: enteredOtp
+        });
+        if (smsVerifyRes?.return === true || smsVerifyRes?.status_code === 200) {
+          isValidOtp = true;
         }
-      } catch (dbErr) {
-        console.warn('Firestore read warning in verifyOtp:', dbErr.message);
+      } catch (err) {
+        console.warn('Fast2SMS verify check error, checking Firestore fallback:', err.message);
       }
     }
 
-    // Check or create user profile in Firestore 'users' collection
+    // B. Check Firestore otp_sessions
+    if (!isValidOtp && db) {
+      const otpSnap = await db.collection('otp_sessions').doc(cleanPhone).get();
+      if (otpSnap.exists) {
+        const otpData = otpSnap.data();
+        const now = new Date();
+        const expiry = new Date(otpData.expiresAt);
+
+        if (now <= expiry && otpData.otp === enteredOtp) {
+          isValidOtp = true;
+        }
+      }
+    }
+
+    // C. Static fallback for 123456 demo testing
+    if (!isValidOtp && enteredOtp === '123456') {
+      isValidOtp = true;
+    }
+
+    if (!isValidOtp) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid OTP entered. Please check the 6-digit code and try again.'
+      });
+    }
+
+    // OTP Verified! Fetch or create user profile in Firestore 'users' collection
     let userProfile = {
-      id: `USR-${cleanPhone.replace(/\D/g, '')}`,
+      id: `USR-${mobile10Digits}`,
       fullName: fullName || 'Flower Customer',
       phoneNumber: cleanPhone,
-      email: email || `${cleanPhone.replace(/\D/g, '')}@example.com`,
+      email: email || `${mobile10Digits}@example.com`,
       alternateNumber: '',
       address: {
         houseNo: '',
@@ -99,32 +192,28 @@ export const verifyOtp = async (req, res) => {
     };
 
     if (db) {
-      try {
-        const userRef = db.collection('users').doc(cleanPhone);
-        const userSnap = await userRef.get();
+      const userRef = db.collection('users').doc(cleanPhone);
+      const userSnap = await userRef.get();
 
-        if (!userSnap.exists) {
-          await userRef.set(userProfile);
-          console.log(`Created new Firestore user profile for ${cleanPhone}`);
-        } else {
-          userProfile = userSnap.data();
-          if (fullName || email) {
-            const updateData = { updatedAt: new Date().toISOString() };
-            if (fullName) updateData.fullName = fullName;
-            if (email) updateData.email = email;
-            await userRef.update(updateData);
-            userProfile = (await userRef.get()).data();
-          }
+      if (!userSnap.exists) {
+        await userRef.set(userProfile);
+        console.log(`Created new Firestore user profile for ${cleanPhone}`);
+      } else {
+        userProfile = userSnap.data();
+        if (fullName || email) {
+          const updateData = { updatedAt: new Date().toISOString() };
+          if (fullName) updateData.fullName = fullName;
+          if (email) updateData.email = email;
+          await userRef.update(updateData);
+          userProfile = (await userRef.get()).data();
         }
-      } catch (dbErr) {
-        console.warn('Firestore profile write warning in verifyOtp:', dbErr.message);
       }
     }
 
     return res.status(200).json({
       success: true,
       message: 'OTP verified successfully.',
-      token: `fs_token_${cleanPhone.replace(/\D/g, '')}`,
+      token: `fs_token_${mobile10Digits}`,
       user: userProfile
     });
 
@@ -133,6 +222,67 @@ export const verifyOtp = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to verify OTP.',
+      error: error.message
+    });
+  }
+};
+
+// 3. Resend OTP (Fast2SMS /dev/otp/resend + Firestore session extension)
+export const resendOtp = async (req, res) => {
+  const { phoneNumber } = req.body;
+
+  if (!phoneNumber) {
+    return res.status(400).json({
+      success: false,
+      message: 'Mobile number is required.'
+    });
+  }
+
+  const cleanPhone = phoneNumber.trim();
+  const mobile10Digits = cleanPhone.replace(/\D/g, '').slice(-10);
+
+  try {
+    let existingOtp = '123456';
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
+    if (db) {
+      const otpSnap = await db.collection('otp_sessions').doc(cleanPhone).get();
+      if (otpSnap.exists) {
+        existingOtp = otpSnap.data().otp || Math.floor(100000 + Math.random() * 900000).toString();
+      } else {
+        existingOtp = Math.floor(100000 + Math.random() * 900000).toString();
+      }
+
+      await db.collection('otp_sessions').doc(cleanPhone).set({
+        phoneNumber: cleanPhone,
+        mobile: mobile10Digits,
+        otp: existingOtp,
+        expiresAt,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+    }
+
+    console.log(`[RESEND OTP] Mobile: ${mobile10Digits} | Code: ${existingOtp}`);
+
+    let smsResult = null;
+    if (process.env.FAST2SMS_API_KEY) {
+      smsResult = await makeFast2SMSRequest('/dev/otp/resend', {
+        mobile: mobile10Digits
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: smsResult?.message || `OTP resent successfully to +91 ${mobile10Digits}.`,
+      otp: existingOtp,
+      expiresAt,
+      fast2sms: smsResult
+    });
+  } catch (error) {
+    console.error('Error resending OTP:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to resend OTP.',
       error: error.message
     });
   }
@@ -153,20 +303,15 @@ export const getUserProfile = async (req, res) => {
 
   try {
     if (db) {
-      try {
-        const userSnap = await db.collection('users').doc(cleanPhone).get();
-        if (userSnap.exists) {
-          return res.status(200).json({
-            success: true,
-            user: userSnap.data()
-          });
-        }
-      } catch (dbErr) {
-        console.warn('Firestore read warning in getUserProfile:', dbErr.message);
+      const userSnap = await db.collection('users').doc(cleanPhone).get();
+      if (userSnap.exists) {
+        return res.status(200).json({
+          success: true,
+          user: userSnap.data()
+        });
       }
     }
 
-    // Return default profile format if not in DB yet
     return res.status(200).json({
       success: true,
       user: {
@@ -242,31 +387,27 @@ export const updateUserProfile = async (req, res) => {
 
   try {
     if (db) {
-      try {
-        const userRef = db.collection('users').doc(cleanPhone);
-        const userSnap = await userRef.get();
+      const userRef = db.collection('users').doc(cleanPhone);
+      const userSnap = await userRef.get();
 
-        if (userSnap.exists) {
-          const currentData = userSnap.data();
-          profilePayload = {
-            ...currentData,
-            fullName: fullName !== undefined ? fullName : (currentData.fullName || ''),
-            email: email !== undefined ? email : (currentData.email || ''),
-            alternateNumber: alternateNumber !== undefined ? alternateNumber : (currentData.alternateNumber || ''),
-            address: {
-              ...(currentData.address || {}),
-              ...updatedAddress
-            },
-            updatedAt: new Date().toISOString()
-          };
-          await userRef.update(profilePayload);
-        } else {
-          profilePayload.orders = [];
-          profilePayload.createdAt = new Date().toISOString();
-          await userRef.set(profilePayload);
-        }
-      } catch (dbErr) {
-        console.warn('Firestore update warning in updateUserProfile:', dbErr.message);
+      if (userSnap.exists) {
+        const currentData = userSnap.data();
+        profilePayload = {
+          ...currentData,
+          fullName: fullName !== undefined ? fullName : (currentData.fullName || ''),
+          email: email !== undefined ? email : (currentData.email || ''),
+          alternateNumber: alternateNumber !== undefined ? alternateNumber : (currentData.alternateNumber || ''),
+          address: {
+            ...(currentData.address || {}),
+            ...updatedAddress
+          },
+          updatedAt: new Date().toISOString()
+        };
+        await userRef.update(profilePayload);
+      } else {
+        profilePayload.orders = [];
+        profilePayload.createdAt = new Date().toISOString();
+        await userRef.set(profilePayload);
       }
     }
 
@@ -349,19 +490,15 @@ export const addUserOrder = async (req, res) => {
 
   try {
     if (db) {
-      try {
-        const userRef = db.collection('users').doc(cleanPhone);
-        const userSnap = await userRef.get();
+      const userRef = db.collection('users').doc(cleanPhone);
+      const userSnap = await userRef.get();
 
-        if (userSnap.exists) {
-          const existingOrders = userSnap.data().orders || [];
-          await userRef.update({
-            orders: [orderEntry, ...existingOrders],
-            updatedAt: new Date().toISOString()
-          });
-        }
-      } catch (dbErr) {
-        console.warn('Firestore update warning in addUserOrder:', dbErr.message);
+      if (userSnap.exists) {
+        const existingOrders = userSnap.data().orders || [];
+        await userRef.update({
+          orders: [orderEntry, ...existingOrders],
+          updatedAt: new Date().toISOString()
+        });
       }
     }
 
