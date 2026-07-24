@@ -10,8 +10,22 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const keyFilePath = path.join(__dirname, 'serviceAccountKey.json');
 
-// Built-in Base64 credential fallback for Vercel production serverless functions
-const DEFAULT_SERVICE_ACCOUNT_B64 = "eyJ0eXBlIjoic2VydmljZV9hY2NvdW50IiwicHJvamVjdF9pZCI6ImZsb3dlci1zdHVkaW8tMzc4NjEiLCJwcml2YXRlX2tleV9pZCI6IjEwM2VhMTZmMWMyZDg5ODJmYWQzYzhkMzQzNDNiMjlhMjdlMWRiYzIiLCJwcml2YXRlX2tleSI6Ii0tLS0tQkVHSU4gUFJJVkFURSBLRVktLS0tLVxuTUlJRXZRSUJBREFOQmdrcWhraUc5dzBCQVFFRkFBU0NCS2N3Z2dTakFnRUFBb0lCQVFESmJhRkIrNXdraDdWK1xuUjY3MkhyUG9USWp2blZxWXVNWFJBdGhZYUJxNklldE9wL1ZDQTBUUlVoUnM4Uk1Hd3FCeFBheXNoOFU4MHpBaFxuemhPdENDUXhmUnJQSEg3ZkVKNmFxRUJYd3RLYVc0VGZuZDVaczFSaGN5clNveXVlVHJ3NW1xNnlWM1g1OE5YWlxuZzJRSzY5UlduS09PeFc5QjhmQ2ZDdzJ0cDVZZVJBOHdWeGpzejNYT3IvQmRrd0YzUlFIQWl5L09Md1Z4Mm13WlxuWFJXYUtGRTlJTDkgQVVNUUsrb0lPYTNCNkcrVUxFeEZuMU9GdUQ1MWVXV0kvb1hlaGVWN0QrdFFBdjZHMzhSaGdcbmNTS1oySkJjVmNlOHpvZnFQUVlwcnF1eThsUmh0T3cxN09jMWxDMC9yR1I0VTd0a1k5b0hwaDJoVElDU1lTUGdua3N6aTdaWkFnTUJBQUVDZ2dFQUJvc2lMdk9PaWYxQ254eVRDWG5MM0dNSUc4aWYxZEJDMlFUZnBGZVZickNGXG5aV085YXV5U1FyNkkzVlVqaWhldWdKOUJTY1dMV2NOK2pCcVRCdzc1cGdYclpna0Y4aGNuSDkwUllnaDVNUHlDXG5INFdRWUplYnlTS2xwaFdhR2FVTEprL3BGdkFTYkJFdjBVWWNiT0ptWG4zdUxrZ3BxaG5DK0ZleWxRNlpzTmY4XG5aRWRNV1djb0JKSmdWOHBvOWFPdjQ3dk1PK1ZRc1ZCL3BaV3FFRVVPZFpDRFNHdFR0YkFPcFl1UkFMaXl2dkZcbgh2djZoV1JBOXNKL2VmcVd5Yk5YTGROZThSZFJhNmloQjBOMS9aNFVGZ1BEUlRrcm5Qb0xZRk5MV1Q2RHNvXG5YVlB3WUVpanpCK2tPVmwzN2NTQVlkc2dpOGJIeDdVMzZqd3UxZzhjZFFLQmdRRDZKSENWdzg4MVpDTDV4bTdyTHpYMVFydXZsYmtxSnljVnJhdWRnK0ZlcHhSRlU1YmptQnhGTVp1aTlyN1NBNGt2N2pBNWZlMEp3cURoSW8xa1JjNDZ5SEdmdEZ5L011eG5lK0k4SmdWVUNaYnJjZ2JtNmdxckV3WkJHNVpMZDZwSldMNDh5U0E2OHp5aXlaOUFLQmdRRFhubE00b0lxckRjS3VBeXJXVUhDejZLWExMNDd1ME1HMDVZdWg1ZVZOQmtyRFNuZWtLeVVxRmJjVG5NTDNqaWFGUk9aUzF1am1qWEtnMUtsbDAxeUFsNzlLRnJQRFhOZzlwbHFhQkpIZDQ4aWhtYWdYNjBJc3NtUUVZaXBuWkMwSk1FbGlnTVE3V2VtcW1ySFAxVG90RE1WdjM2QVJBV0luMERTRGQ1UWJ3S0JnQ2ZzZ2xqQmQ3RUxnU1RKamxBNEZ1dUpHcDFoQloveWdoTmtBazI1VGZhcDd3NjNNdk9zNE9uWlArRkVTVVNBcXVNcHdVckR3N3kwbjlzMmdXYzhoOTVFM0FWZHFYNlBqMWlxWUJTY2JwcFZneWN0SDcyazM4YzRyS3ZtWDViUDc4Q20wRFZrTjRWb28wa1BmdktoNHZxSzR2RU9EWi95RmloMTdVUUlGZGZBb0dBTndFVVdUNmJRdTkzZ3daOFJPR2FBdVlRcGR4OTY3SFpHQnBPU2xobzdBTU1JNDVTRkpKODk0VmVsR1F5NEErAlternativeVNSERlVHl2OXhNSWUyNzFjK0JCN2Rab3VQZGdPaW5MaHVxUGd6dUh6c2hSQ2pCVXNHVzNmOGY4aXY5eVJCR1NCaHM5bTd6U28vM3QvcSt3bXMxbWxwRGJOTWJoT2g1M1NqYjRVQ2dZRUFrRE84ODN5eWYvRFIzVjUrVDdsWDdJL3lQbWNGbm1ET1RWTCtMZjNvc1Y3NStBOElEUGdmTzN5UVF5OXJING1zdW0xQlc0UDdCQVgzSFF6dURaZHpNS1h2ZFN2M2Fod0sxTkV4cU5JMFJld0IvQklTTXZxV0FiUm15VVM2WXZxeFhTaVhhajBDTGlUWDhXQTJDcTkwWGpVTDNMdFRGZEwxZkUyRmQ4d3dRPVxuLS0tLS1FTkQgUFJJVkFURUtFWS0tLS0tXG4iLCJjbGllbnRfZW1haWwiOiJmaXJlYmFzZS1hZG1pbnNkay1mYnN2Y0BmbG93ZXItc3R1ZGlvLTM3ODYxLmlhbS5nc2VydmljZWFjY291bnQuY29tIiwiY2xpZW50X2lkIjoiMTExMDE0ODM3NjE5MzUwNzM3ODQwIiwiYXV0aF91cmkiOiJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20vby9vYXV0aDIvYXV0aCIsInRva2VuX3VyaSI6Imh0dHBzOi8vb2F1dGgyLmdvb2dsZWFwaXMuY29tL3Rva2VuIiwiYXV0aF9wcm92aWRlcl94NTA5X2NlcnRfdXJsIjoiaHR0cHM6Ly93d3cuZ29vZ2xlYXBpcy5jb20vb2F1dGgyL3YxL2NlcnRzIiwiY2xpZW50X3g1MDlfY2VydF91cmwiOiJodHRwczovL2dvb2dsZWFwaXMuY29tL3JvYm90L3YxL21ldGFkYXRhL3g1MDkvZmlyZWJhc2UtYWRtaW5zZGstZmJzdmMlNDBmbG93ZXItc3R1ZGlvLTM3ODYxLmlhbS5nc2VydmljZWFjY291bnQuY29tIiwidW5pdmVyc2VfZG9tYWluIjoiZ29vZ2xlYXBpcy5jb20ifQ==";
+// Built-in Service Account Credentials Fallback for Vercel Serverless Functions
+const DEFAULT_SERVICE_ACCOUNT = {
+  type: "service_account",
+  project_id: "flower-studio-37861",
+  private_key_id: "103ea16f1c2d8982fad3c8d34343b29a27e1dbc2",
+  private_key: "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDJbaFB+5wkh7V+\nR672HrPoTIjvnVqYuMZRAthYaBq6IetOp/VCA0TRUhRs8RMGwqBxPaysh8U80zAh\nzhOtCCQxfRrPHH7fEJ6aqEBXwtKaW4Tfnd5Zs1RhcyrSoyueTrw5mq6yV3X58NXZ\ng2QK69RWnKOOxW9B8fCfCw2tp5YeRA8wVxjszsXOr/BdkwF3RQHAiy/OLwVx2mwZ\nXRWaKFE9IL9AUMQK+oIOa3B6G+ULExFn1OFuD51eEWI/oXeheV7D+tQAv6G38Rhg\nCdSKZ2JBcVce8zofqPQYpRquy8lRhtOw17Oc1lC0/rGR4U7tkY9oHpi2hTICSYSP\ngkszi7ZZAgMBAAECggEABosiLvOOif1CnxyTCXnL3GMIG8if1dBC2QTfpFeVbrCF\nZWO9auySQr6I3VUjiheugJ9BScWLWcN+j8qTBw75pgXrZgkF8hcnH90RYgh5MPyC\nH4WQYJebySKlpHwagaULJk/pFvASbBEv0UYcbOJmXn3uLkgpqhnC+FeylQ6ZqNf8\nZEdMWWcoBJJgV8po9aOv47vMO+VQsVB/pZWqEEUOdZCDSGtTtbAOPqYuRALiyvvF\n8vv6hWRA9rJ/efqWFybNXLdNe8RdRa6i/hB0N1/Z4UFgPDRTkrnPoLYFNLWT6Dso\nXVPwYEijzB+kOVl37cSAYdsgi8bHx7U36jwu1g8cdQKBgQDvJTuf+CYOuNm0NMPu\ndfQm13RS6jFkl5MCOY1vn6+CZVrG5BQAprPnD7GgxeoqHYOoaX1nO/s83gP5UQrf\nx3LtaloKqYRSeuKj99/3rqY9KmizJK+9GHAIbyigxZQuEKl0vfP10UpH/BV/bAJX\nMZy1VGKBSwmiLEoKrIvlUoC5twKBgQDXn+MAoIwqrDcKuAyrWUHCz6KXL47u0MG0\n5Yuh5eVNBk+rDSnekKyUqFbcTnML3jiaFROZS1ujmjXKg1Kll01yAl79KFrPDXNg\n9plqaBJHd48ihmagX60IssmQEYZpnZC0JMEligMQ7WemqmrHP1TotDMVv36ARAWI\nn0DSEd5QbwKBgCfsgljBd7ELgSTJjlA4FuuJGp1hBZ/yghNkAk25Tfap7w63MvOs\n4OnZP+FESUSAquMpwUrDw7y0n9s2gWc8h95E3AVdqX6Pj1iqYBScbppVgyctH72k\n38c4r4KvmX5bP78Cm0DVkN4Voo0kPfvKh4vqK4vEODZ/yFih17UQIfdfAoGANwEU\nWT6bQu93gwZ8ROGaAuYQpdx967HZGBpOSlho7AMmI45SFfJ1894VelGQy4A+lB+4\nRiyRDeTyv9xMIu271c+BB7dZouPdgOinLhuqPgzjuHzshRCjBUsGW/f8f8iv9yRB\nGSBhs9m7zSo/3t/q+wms1mlpDbNMbhOh53Sjb4UCgYEAkDO883yyf/DR3V5+T7lX\n7I/yPmcFnmDOTVL+Lf3osV75+A8IDPgfO3yYQy9rH4msum1BW4P7BAX3HQzuDZdz\nMKXjvDSv3ahwK1NExqNI0RewB/BISMvqWAbRmyUS6YVqzXEsiXaj0OLiTX8WA2Cq\n90XjUL3LtTFdL1fE2Fd8wwQ=\n-----END PRIVATE KEY-----\n",
+  client_email: "firebase-adminsdk-fbsvc@flower-studio-37861.iam.gserviceaccount.com",
+  client_id: "111014837619350737840",
+  auth_uri: "https://accounts.google.com/o/oauth2/auth",
+  token_uri: "https://oauth2.googleapis.com/token",
+  auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+  client_x509_cert_url: "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40flower-studio-37861.iam.gserviceaccount.com",
+  universe_domain: "googleapis.com"
+};
+
+let lastInitError = null;
 
 function initFirebase() {
   if (admin.apps.length > 0) {
@@ -29,7 +43,7 @@ function initFirebase() {
       return admin.firestore();
     }
 
-    // 2. FIREBASE_SERVICE_ACCOUNT (JSON string or Base64 in env var)
+    // 2. FIREBASE_SERVICE_ACCOUNT (JSON string or Base64 string in env var)
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
       let rawEnv = process.env.FIREBASE_SERVICE_ACCOUNT.trim();
       
@@ -74,28 +88,15 @@ function initFirebase() {
       return admin.firestore();
     }
 
-    // 4. Built-in Base64 Credential Fallback (Ensures Vercel serverless works seamlessly)
-    if (DEFAULT_SERVICE_ACCOUNT_B64) {
-      const decodedJson = Buffer.from(DEFAULT_SERVICE_ACCOUNT_B64, 'base64').toString('utf8');
-      const serviceAccount = JSON.parse(decodedJson);
-      if (serviceAccount.private_key) {
-        serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
-      }
-      admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
-      });
-      console.log('Firebase Admin initialized with built-in Base64 credential fallback.');
-      return admin.firestore();
-    }
-
-    // 5. Fallback Default Project ID initialization
+    // 4. Built-in Credential Fallback (Ensures Vercel serverless works 100% out-of-the-box)
     admin.initializeApp({
-      projectId: process.env.FIREBASE_PROJECT_ID || 'flower-studio-37861'
+      credential: admin.credential.cert(DEFAULT_SERVICE_ACCOUNT)
     });
-    console.log('Firebase Admin initialized with default project ID.');
+    console.log('Firebase Admin initialized with built-in service account credential.');
     return admin.firestore();
   } catch (error) {
     console.error('Firebase Admin initialization error:', error.message);
+    lastInitError = error.message;
     return null;
   }
 }
@@ -106,7 +107,7 @@ export function getDb() {
   }
   const dbInstance = initFirebase();
   if (!dbInstance) {
-    throw new Error('Firebase Firestore is not initialized.');
+    throw new Error(`Firebase Firestore is not initialized. Error: ${lastInitError || 'Unknown initialization error'}`);
   }
   return dbInstance;
 }
