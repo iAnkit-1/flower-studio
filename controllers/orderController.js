@@ -1,4 +1,4 @@
-import { pool } from '../config/db.js';
+import db from '../config/db.js';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
 
@@ -47,49 +47,42 @@ export const createOrder = async (req, res) => {
   const orderId = `FS-${Date.now().toString().slice(-6)}-${randNum}`;
 
   try {
-    // 1. Insert Order record (pending state)
-    const orderInsertQuery = `
-      INSERT INTO orders (
-        id, recipient_name, recipient_phone, delivery_address, gift_message,
-        items_subtotal, addons_subtotal, delivery_total, grand_total,
-        payment_method, payment_status, delivery_status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      RETURNING *
-    `;
-    const initialPaymentStatus = payment_method === 'cod' ? 'pending' : 'pending';
-    const orderValues = [
-      orderId, recipient_name, recipient_phone, delivery_address, gift_message || null,
-      items_subtotal, addons_subtotal, delivery_total, grand_total,
-      payment_method, initialPaymentStatus, 'pending'
-    ];
-    const orderResult = await pool.query(orderInsertQuery, orderValues);
-    const savedOrder = orderResult.rows[0];
+    const formattedItems = items.map(item => ({
+      product_id: item.product_id || '',
+      product_title: item.product_title || '',
+      product_image: item.product_image || null,
+      quantity: parseInt(item.quantity || 1, 10),
+      price: parseFloat(item.price || 0.0),
+      delivery_date: item.delivery_date ? new Date(item.delivery_date).toISOString() : null,
+      delivery_slot: item.delivery_slot || null,
+      delivery_price: parseFloat(item.delivery_price || 0.0),
+      addons: item.addons || []
+    }));
 
-    // 2. Insert Order Items records
-    const itemInsertQuery = `
-      INSERT INTO order_items (
-        order_id, product_id, product_title, product_image, quantity, price,
-        delivery_date, delivery_slot, delivery_price, addons
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-    `;
+    const orderDocument = {
+      id: orderId,
+      recipient_name,
+      recipient_phone,
+      delivery_address,
+      gift_message: gift_message || null,
+      items_subtotal: parseFloat(items_subtotal || 0.0),
+      addons_subtotal: parseFloat(addons_subtotal || 0.0),
+      delivery_total: parseFloat(delivery_total || 0.0),
+      grand_total: parseFloat(grand_total || 0.0),
+      payment_method,
+      payment_status: 'pending',
+      razorpay_order_id: null,
+      razorpay_payment_id: null,
+      razorpay_signature: null,
+      delivery_status: 'pending',
+      items: formattedItems,
+      created_at: new Date().toISOString()
+    };
 
-    for (const item of items) {
-      const itemValues = [
-        orderId,
-        item.product_id,
-        item.product_title,
-        item.product_image || null,
-        item.quantity,
-        item.price,
-        item.delivery_date ? new Date(item.delivery_date) : null,
-        item.delivery_slot || null,
-        item.delivery_price || 0.0,
-        JSON.stringify(item.addons || [])
-      ];
-      await pool.query(itemInsertQuery, itemValues);
-    }
+    // Save order in Firestore
+    await db.collection('orders').doc(orderId).set(orderDocument);
 
-    // 3. Handle Payment Method Integration
+    // Handle Payment Method Integration
     if (payment_method === 'cod') {
       console.log(`COD order placed: ${orderId}`);
       return res.status(201).json({
@@ -106,8 +99,6 @@ export const createOrder = async (req, res) => {
       try {
         const amountInPaisa = Math.round(parseFloat(grandTotal) * 100);
 
-        // Host callback url mapping (matches local server port or production host)
-        // Standard checkout redirect URL after payment
         const protocol = req.headers['x-forwarded-proto'] || req.protocol;
         const host = req.get('host');
         const callbackUrl = `${protocol}://${host}/api/orders/callback`;
@@ -144,11 +135,10 @@ export const createOrder = async (req, res) => {
 
         const paymentLink = await razorpay.paymentLink.create(plinkOptions);
 
-        // Update order record with Razorpay Payment Link ID
-        await pool.query(
-          'UPDATE orders SET razorpay_order_id = $1 WHERE id = $2',
-          [paymentLink.id, orderId]
-        );
+        // Update order record with Razorpay Payment Link ID in Firestore
+        await db.collection('orders').doc(orderId).update({
+          razorpay_order_id: paymentLink.id
+        });
 
         console.log(`Razorpay Payment Link generated: ${paymentLink.id} (URL: ${paymentLink.short_url})`);
 
@@ -166,7 +156,7 @@ export const createOrder = async (req, res) => {
       }
     }
 
-    // Fallback Mock Hosted Checkout Page URL (runs on our Express server)
+    // Fallback Mock Hosted Checkout Page URL
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;
     const host = req.get('host');
     const mockCheckoutUrl = `${protocol}://${host}/api/orders/mock-checkout/${orderId}`;
@@ -182,7 +172,7 @@ export const createOrder = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error placing order:', error);
+    console.error('Error placing order in Firestore:', error);
     return res.status(500).json({ success: false, message: 'Internal Server Error.' });
   }
 };
@@ -206,13 +196,14 @@ export const verifyPayment = async (req, res) => {
   }
 
   try {
-    // Check if the order exists in db
-    const orderCheck = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
-    if (orderCheck.rows.length === 0) {
+    const docRef = db.collection('orders').doc(orderId);
+    const docSnap = await docRef.get();
+
+    if (!docSnap.exists) {
       return res.status(404).json({ success: false, message: 'Order not found in database.' });
     }
 
-    const order = orderCheck.rows[0];
+    const order = docSnap.data();
 
     // If simulated or keys are absent
     if (isSimulated || !razorpay || razorpay_signature === 'simulated_signature_ok') {
@@ -220,12 +211,13 @@ export const verifyPayment = async (req, res) => {
       const pMethod = paymentMethod || order.payment_method;
       const pStatus = pMethod === 'cod' ? 'pending' : 'paid';
 
-      await pool.query(
-        `UPDATE orders 
-         SET payment_status = $1, razorpay_payment_id = $2, razorpay_signature = $3, delivery_status = 'handcrafting', payment_method = $4
-         WHERE id = $5`,
-        [pStatus, finalPaymentId, razorpay_signature || 'simulated_sig', pMethod, orderId]
-      );
+      await docRef.update({
+        payment_status: pStatus,
+        razorpay_payment_id: finalPaymentId,
+        razorpay_signature: razorpay_signature || 'simulated_sig',
+        delivery_status: 'handcrafting',
+        payment_method: pMethod
+      });
       console.log(`Order ${orderId} verified successfully (simulated)`);
       return res.status(200).json({
         success: true,
@@ -242,12 +234,12 @@ export const verifyPayment = async (req, res) => {
       .digest('hex');
 
     if (generatedSignature === razorpay_signature) {
-      await pool.query(
-        `UPDATE orders 
-         SET payment_status = 'paid', razorpay_payment_id = $1, razorpay_signature = $2, delivery_status = 'handcrafting'
-         WHERE id = $3`,
-        [razorpay_payment_id, razorpay_signature, orderId]
-      );
+      await docRef.update({
+        payment_status: 'paid',
+        razorpay_payment_id: razorpay_payment_id,
+        razorpay_signature: razorpay_signature,
+        delivery_status: 'handcrafting'
+      });
       console.log(`Order ${orderId} verified successfully (Real Razorpay)`);
       return res.status(200).json({
         success: true,
@@ -255,13 +247,13 @@ export const verifyPayment = async (req, res) => {
         orderId: orderId
       });
     } else {
-      await pool.query("UPDATE orders SET payment_status = 'failed' WHERE id = $1", [orderId]);
+      await docRef.update({ payment_status: 'failed' });
       console.error(`Invalid Razorpay signature for order ${orderId}`);
       return res.status(400).json({ success: false, message: 'Invalid payment signature verified.' });
     }
 
   } catch (error) {
-    console.error('Error verifying payment:', error);
+    console.error('Error verifying payment in Firestore:', error);
     return res.status(500).json({ success: false, message: 'Internal Server Error during verification.' });
   }
 };
@@ -282,37 +274,18 @@ export const getOrdersByIds = async (req, res) => {
   }
 
   try {
-    // Query orders matching ANY of the IDs in the array
-    const ordersQuery = `
-      SELECT * FROM orders 
-      WHERE id = ANY($1) 
-      ORDER BY created_at DESC
-    `;
-    const ordersResult = await pool.query(ordersQuery, [orderIds]);
-    const orders = ordersResult.rows;
-
-    // Fetch items for each order
     const completedOrders = [];
-    for (const order of orders) {
-      const itemsQuery = 'SELECT * FROM order_items WHERE order_id = $1';
-      const itemsResult = await pool.query(itemsQuery, [order.id]);
-
-      // Parse JSON columns back appropriately
-      const items = itemsResult.rows.map(item => ({
-        ...item,
-        addons: typeof item.addons === 'string' ? JSON.parse(item.addons) : item.addons
-      }));
-
-      completedOrders.push({
-        ...order,
-        items
-      });
+    for (const id of orderIds) {
+      const docSnap = await db.collection('orders').doc(id).get();
+      if (docSnap.exists) {
+        completedOrders.push(docSnap.data());
+      }
     }
 
     return res.status(200).json({ success: true, orders: completedOrders });
 
   } catch (error) {
-    console.error('Error fetching order records:', error);
+    console.error('Error fetching order records from Firestore:', error);
     return res.status(500).json({ success: false, message: 'Internal Server Error.' });
   }
 };
@@ -325,37 +298,29 @@ export const getInvoice = async (req, res) => {
   const { orderId } = req.params;
 
   try {
-    const orderQuery = 'SELECT * FROM orders WHERE id = $1';
-    const orderResult = await pool.query(orderQuery, [orderId]);
+    const docSnap = await db.collection('orders').doc(orderId).get();
 
-    if (orderResult.rows.length === 0) {
+    if (!docSnap.exists) {
       return res.status(404).send('<h1>Invoice Not Found</h1><p>The specified order details do not exist.</p>');
     }
 
-    const order = orderResult.rows[0];
-
-    const itemsQuery = 'SELECT * FROM order_items WHERE order_id = $1';
-    const itemsResult = await pool.query(itemsQuery, [orderId]);
-    const items = itemsResult.rows.map(item => ({
-      ...item,
-      addons: typeof item.addons === 'string' ? JSON.parse(item.addons) : item.addons
-    }));
+    const order = docSnap.data();
+    const items = order.items || [];
 
     // Perform tax back-calculation (GST is 18% inclusive in the catalog prices)
     const gstRate = 0.18;
-    const calcSubtotal = parseFloat(order.items_subtotal);
-    const calcAddons = parseFloat(order.addons_subtotal);
-    const calcDelivery = parseFloat(order.delivery_total);
-    const calcGrand = parseFloat(order.grand_total);
+    const calcSubtotal = parseFloat(order.items_subtotal || 0);
+    const calcAddons = parseFloat(order.addons_subtotal || 0);
+    const calcDelivery = parseFloat(order.delivery_total || 0);
+    const calcGrand = parseFloat(order.grand_total || 0);
 
-    // Items and Addons are GST items, delivery can be considered service (GST inclusive or exempt, let's treat all inclusive for simpler compliance)
     const grossPrice = calcSubtotal + calcAddons + calcDelivery;
     const taxableValue = grossPrice / (1 + gstRate);
     const totalGst = grossPrice - taxableValue;
     const cgst = totalGst / 2;
     const sgst = totalGst / 2;
 
-    const formattedDate = new Date(order.created_at).toLocaleDateString('en-IN', {
+    const formattedDate = new Date(order.created_at || Date.now()).toLocaleDateString('en-IN', {
       day: '2-digit',
       month: 'long',
       year: 'numeric',
@@ -363,21 +328,19 @@ export const getInvoice = async (req, res) => {
       minute: '2-digit'
     });
 
-    // Determine HSN code depending on category defaults
     const getHSN = (title = '') => {
       const lower = title.toLowerCase();
-      if (lower.includes('cake')) return '1905'; // Bakery
-      if (lower.includes('chocolate')) return '1806'; // Chocolates
-      if (lower.includes('plant')) return '0602'; // Live Plants
-      return '0603'; // Cut flowers & arrangements (Flower Studio standard)
+      if (lower.includes('cake')) return '1905';
+      if (lower.includes('chocolate')) return '1806';
+      if (lower.includes('plant')) return '0602';
+      return '0603';
     };
 
-    // Render HTML
     let tableRows = '';
     let counter = 1;
 
     for (const item of items) {
-      const itemPrice = parseFloat(item.price);
+      const itemPrice = parseFloat(item.price || 0);
       const itemGst = itemPrice - (itemPrice / (1 + gstRate));
       const itemTaxable = itemPrice - itemGst;
 
@@ -397,30 +360,29 @@ export const getInvoice = async (req, res) => {
         </tr>
       `;
 
-      // Render Add-ons if present
       if (item.addons && item.addons.length > 0) {
         for (const addon of item.addons) {
-          const addonPrice = parseFloat(addon.product.price);
+          const addonPrice = parseFloat(addon.product?.price || addon.price || 0);
           const addonGst = addonPrice - (addonPrice / (1 + gstRate));
           const addonTaxable = addonPrice - addonGst;
+          const addonTitle = addon.product?.title || addon.title || 'Add-on Item';
 
           tableRows += `
             <tr class="addon-row">
               <td></td>
-              <td class="desc">🎁 Add-on: ${addon.product.title}</td>
-              <td>${getHSN(addon.product.title)}</td>
+              <td class="desc">🎁 Add-on: ${addonTitle}</td>
+              <td>${getHSN(addonTitle)}</td>
               <td>₹${addonTaxable.toFixed(2)}</td>
-              <td>${addon.quantity}</td>
-              <td>9%<br><small>₹${(addonGst / 2 * addon.quantity).toFixed(2)}</small></td>
-              <td>9%<br><small>₹${(addonGst / 2 * addon.quantity).toFixed(2)}</small></td>
-              <td>₹${(addonPrice * addon.quantity).toFixed(2)}</td>
+              <td>${addon.quantity || 1}</td>
+              <td>9%<br><small>₹${(addonGst / 2 * (addon.quantity || 1)).toFixed(2)}</small></td>
+              <td>9%<br><small>₹${(addonGst / 2 * (addon.quantity || 1)).toFixed(2)}</small></td>
+              <td>₹${(addonPrice * (addon.quantity || 1)).toFixed(2)}</td>
             </tr>
           `;
         }
       }
     }
 
-    // Add delivery charges as a row if > 0
     if (calcDelivery > 0) {
       const delGst = calcDelivery - (calcDelivery / (1 + gstRate));
       const delTaxable = calcDelivery - delGst;
@@ -527,9 +489,6 @@ export const getInvoice = async (req, res) => {
       font-size: 13px;
       color: #333333;
     }
-    .meta-block strong {
-      color: #2b2d42;
-    }
     .items-table {
       width: 100%;
       border-collapse: collapse;
@@ -554,15 +513,6 @@ export const getInvoice = async (req, res) => {
       background-color: #fafbfc;
       font-style: italic;
       color: #555555;
-      padding-top: 8px;
-      padding-bottom: 8px;
-    }
-    .items-table td.desc {
-      max-width: 250px;
-    }
-    .items-table .text-muted {
-      font-size: 11px;
-      color: #8d99ae;
     }
     .summary-section {
       float: right;
@@ -608,33 +558,18 @@ export const getInvoice = async (req, res) => {
       font-weight: bold;
       border-radius: 6px;
       cursor: pointer;
-      box-shadow: 0 2px 6px rgba(110, 13, 37, 0.2);
-    }
-    .btn:hover {
-      background-color: #570a1d;
     }
     @media print {
-      body {
-        background-color: white;
-        padding: 0;
-      }
-      .invoice-card {
-        box-shadow: none;
-        border: none;
-        padding: 0;
-      }
-      .actions-bar {
-        display: none;
-      }
+      body { background-color: white; padding: 0; }
+      .invoice-card { box-shadow: none; border: none; padding: 0; }
+      .actions-bar { display: none; }
     }
   </style>
 </head>
 <body>
-
   <div class="actions-bar">
     <button class="btn" onclick="window.print()">Print / Download PDF</button>
   </div>
-
   <div class="invoice-card">
     <table class="header-table">
       <tr>
@@ -651,9 +586,7 @@ export const getInvoice = async (req, res) => {
         </td>
       </tr>
     </table>
-
     <div class="invoice-title">Tax Invoice / Receipt</div>
-
     <table class="meta-table">
       <tr>
         <td style="padding-right: 10px;">
@@ -676,7 +609,6 @@ export const getInvoice = async (req, res) => {
         </td>
       </tr>
     </table>
-
     <table class="items-table">
       <thead>
         <tr>
@@ -694,7 +626,6 @@ export const getInvoice = async (req, res) => {
         ${tableRows}
       </tbody>
     </table>
-
     <div class="summary-section">
       <table class="summary-table">
         <tr>
@@ -719,21 +650,18 @@ export const getInvoice = async (req, res) => {
         </tr>
         <tr>
           <td colspan="2" style="font-size: 11px; text-align: right; color: #8d99ae; padding-top: 10px;">
-            Payment Method: <strong>${order.payment_method.toUpperCase()}</strong> (${order.payment_status.toUpperCase()})
+            Payment Method: <strong>${(order.payment_method || 'ONLINE').toUpperCase()}</strong> (${(order.payment_status || 'PENDING').toUpperCase()})
             ${order.razorpay_payment_id ? `<br>Txn Ref: <strong>${order.razorpay_payment_id}</strong>` : ''}
           </td>
         </tr>
       </table>
     </div>
-    
     <div class="clear"></div>
-
     <div class="invoice-footer">
       <p>Thank you for shopping with Flower Studio! To track or modify your gift deliveries, contact support@flowerstudio.com</p>
       <p>This is a computer-generated document and requires no physical signatures.</p>
     </div>
   </div>
-
 </body>
 </html>
     `;
@@ -747,19 +675,19 @@ export const getInvoice = async (req, res) => {
 };
 
 /**
- * Get Order Payment Status (for polling)
+ * Get Order Payment Status (polling)
  * GET /api/orders/:orderId/status
  */
 export const getOrderStatus = async (req, res) => {
   const { orderId } = req.params;
   try {
-    const result = await pool.query('SELECT payment_status FROM orders WHERE id = $1', [orderId]);
-    if (result.rows.length === 0) {
+    const docSnap = await db.collection('orders').doc(orderId).get();
+    if (!docSnap.exists) {
       return res.status(404).json({ success: false, message: 'Order not found.' });
     }
-    return res.status(200).json({ success: true, payment_status: result.rows[0].payment_status });
+    return res.status(200).json({ success: true, payment_status: docSnap.data().payment_status });
   } catch (error) {
-    console.error('Error checking order status:', error);
+    console.error('Error checking order status in Firestore:', error);
     return res.status(500).json({ success: false, message: 'Error checking status.' });
   }
 };
@@ -771,11 +699,11 @@ export const getOrderStatus = async (req, res) => {
 export const getMockCheckout = async (req, res) => {
   const { orderId } = req.params;
   try {
-    const result = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
-    if (result.rows.length === 0) {
+    const docSnap = await db.collection('orders').doc(orderId).get();
+    if (!docSnap.exists) {
       return res.status(404).send('<h1>Order not found</h1>');
     }
-    const order = result.rows[0];
+    const order = docSnap.data();
 
     const htmlContent = `
 <!DOCTYPE html>
@@ -848,7 +776,7 @@ export const getMockCheckout = async (req, res) => {
       <div class="row"><strong>Order ID:</strong> <span>${order.id}</span></div>
       <div class="row"><strong>Customer:</strong> <span>${order.recipient_name}</span></div>
       <div class="row"><strong>Phone:</strong> <span>${order.recipient_phone}</span></div>
-      <div class="row"><strong>Amount:</strong> <span style="color:#0e5bff;font-weight:bold;">₹${parseFloat(order.grand_total).toFixed(2)}</span></div>
+      <div class="row"><strong>Amount:</strong> <span style="color:#0e5bff;font-weight:bold;">₹${parseFloat(order.grand_total || 0).toFixed(2)}</span></div>
     </div>
     
     <form action="/api/orders/callback" method="GET">
@@ -890,25 +818,20 @@ export const paymentCallback = async (req, res) => {
   const orderId = razorpay_payment_link_reference_id;
 
   try {
-    const orderCheck = await pool.query('SELECT * FROM orders WHERE id = $1', [orderId]);
-    if (orderCheck.rows.length === 0) {
+    const docRef = db.collection('orders').doc(orderId);
+    const docSnap = await docRef.get();
+    if (!docSnap.exists) {
       return res.status(404).send('<h1>Order not found</h1>');
     }
 
-    const order = orderCheck.rows[0];
-
-    // Verification
     if (isSimulated === 'true' || !razorpay || razorpay_signature === 'simulated_signature_ok') {
-      // Update database
-      await pool.query(
-        `UPDATE orders 
-         SET payment_status = 'paid', razorpay_payment_id = $1, razorpay_signature = $2, delivery_status = 'handcrafting'
-         WHERE id = $3`,
-        [razorpay_payment_id || 'pay_sim', razorpay_signature || 'sim_sig', orderId]
-      );
+      await docRef.update({
+        payment_status: 'paid',
+        razorpay_payment_id: razorpay_payment_id || 'pay_sim',
+        razorpay_signature: razorpay_signature || 'sim_sig',
+        delivery_status: 'handcrafting'
+      });
     } else {
-      // Verify Real Payment Link signature: 
-      // text is: payment_link_id + '|' + reference_id + '|' + status + '|' + payment_id
       const text = razorpay_payment_link_id + '|' + razorpay_payment_link_reference_id + '|' + razorpay_payment_link_status + '|' + razorpay_payment_id;
       const expectedSig = crypto
         .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
@@ -916,19 +839,18 @@ export const paymentCallback = async (req, res) => {
         .digest('hex');
 
       if (expectedSig === razorpay_signature && razorpay_payment_link_status === 'paid') {
-        await pool.query(
-          `UPDATE orders 
-           SET payment_status = 'paid', razorpay_payment_id = $1, razorpay_signature = $2, delivery_status = 'handcrafting'
-           WHERE id = $3`,
-          [razorpay_payment_id, razorpay_signature, orderId]
-        );
+        await docRef.update({
+          payment_status: 'paid',
+          razorpay_payment_id: razorpay_payment_id,
+          razorpay_signature: razorpay_signature,
+          delivery_status: 'handcrafting'
+        });
       } else {
-        await pool.query("UPDATE orders SET payment_status = 'failed' WHERE id = $1", [orderId]);
+        await docRef.update({ payment_status: 'failed' });
         return res.status(400).send('<h1>Payment Verification Failed</h1>');
       }
     }
 
-    // Render Success Web page
     const htmlSuccess = `
 <!DOCTYPE html>
 <html>
@@ -987,68 +909,46 @@ export const paymentCallback = async (req, res) => {
   }
 };
 
-// =========================================================================
-// INTERNAL OPERATIONS ENDPOINTS (ADMIN & SUPERVISOR REST API)
-// =========================================================================
-
-// Retrieve all regular orders with items
+// Retrieve all regular orders for admin
 export const getAllOrders = async (req, res) => {
-  const queryText = `
-    SELECT o.id, o.recipient_name AS "recipientName", o.recipient_phone AS "recipientPhone",
-           o.delivery_address AS "deliveryAddress", o.gift_message AS "giftMessage",
-           o.items_subtotal AS "itemsSubtotal", o.addons_subtotal AS "addonsSubtotal",
-           o.delivery_total AS "deliveryTotal", o.grand_total AS "grandTotal",
-           o.payment_method AS "paymentMethod", o.payment_status AS "paymentStatus",
-           o.delivery_status AS "deliveryStatus", o.created_at AS "createdAt",
-           COALESCE(
-             json_agg(
-               json_build_object(
-                 'productId', oi.product_id,
-                 'productImage', oi.product_image,
-                 'productName', oi.product_title,
-                 'quantity', oi.quantity,
-                 'price', oi.price,
-                 'deliveryDate', oi.delivery_date,
-                 'deliverySlot', oi.delivery_slot,
-                 'addons', oi.addons
-               )
-             ) FILTER (WHERE oi.id IS NOT NULL),
-             '[]'
-           ) AS items
-    FROM orders o
-    LEFT JOIN order_items oi ON o.id = oi.order_id
-    GROUP BY o.id
-    ORDER BY o.created_at DESC;
-  `;
-
   try {
-    const result = await pool.query(queryText);
-    
-    // Map order fields to match frontend properties
-    const mapped = result.rows.map(row => ({
-      id: row.id,
-      customerName: row.recipientName,
-      customerEmail: row.recipientName.toLowerCase().replace(/\s+/g, '') + '@example.com',
-      totalAmount: parseFloat(row.grandTotal),
-      orderDate: row.createdAt,
-      status: row.paymentStatus === 'paid' || row.paymentStatus === 'success' ? 'Confirmed' : 'Pending',
-      paymentStatus: row.paymentStatus === 'paid' ? 'Paid' : row.paymentStatus === 'refunded' ? 'Refunded' : 'Unpaid',
-      deliveryAddress: row.deliveryAddress,
-      items: row.items.map(it => ({
-        productId: it.productId,
-        productImage: it.productImage,
-        productName: it.productName,
-        quantity: parseInt(it.quantity, 10),
-        price: parseFloat(it.price)
-      }))
-    }));
+    let snapshot;
+    try {
+      snapshot = await db.collection('orders').orderBy('created_at', 'desc').get();
+    } catch (e) {
+      snapshot = await db.collection('orders').get();
+    }
+
+    const mapped = snapshot.docs.map(doc => {
+      const data = doc.data();
+      const items = data.items || [];
+      const recipientName = data.recipient_name || 'Customer';
+
+      return {
+        id: data.id || doc.id,
+        customerName: recipientName,
+        customerEmail: recipientName.toLowerCase().replace(/\s+/g, '') + '@example.com',
+        totalAmount: parseFloat(data.grand_total || 0),
+        orderDate: data.created_at || new Date().toISOString(),
+        status: data.payment_status === 'paid' || data.payment_status === 'success' ? 'Confirmed' : 'Pending',
+        paymentStatus: data.payment_status === 'paid' ? 'Paid' : data.payment_status === 'refunded' ? 'Refunded' : 'Unpaid',
+        deliveryAddress: data.delivery_address || '',
+        items: items.map(it => ({
+          productId: it.product_id || '',
+          productImage: it.product_image || '',
+          productName: it.product_title || '',
+          quantity: parseInt(it.quantity || 1, 10),
+          price: parseFloat(it.price || 0.0)
+        }))
+      };
+    });
 
     return res.status(200).json({
       success: true,
       orders: mapped
     });
   } catch (err) {
-    console.error('Error fetching all orders for admin:', err);
+    console.error('Error fetching all orders for admin from Firestore:', err);
     return res.status(500).json({
       success: false,
       message: 'Failed to retrieve order listings.',
@@ -1060,104 +960,100 @@ export const getAllOrders = async (req, res) => {
 // Manually update order status (Confirmed or Cancelled)
 export const updateOrderStatus = async (req, res) => {
   const { orderId } = req.params;
-  const { status } = req.body; // e.g. 'Confirmed' or 'Cancelled'
+  const { status } = req.body;
 
   if (!status) {
     return res.status(400).json({ success: false, message: 'Status parameter is required.' });
   }
 
-  // Map Confirmed/Cancelled status to delivery_status and payment_status in database
   const deliveryStatus = status === 'Confirmed' ? 'order confirmed' : 'cancelled';
-  let paymentStatusQuery = '';
+  const updateData = { delivery_status: deliveryStatus };
+
   if (status === 'Cancelled') {
-    paymentStatusQuery = ", payment_status = 'refunded'";
+    updateData.payment_status = 'refunded';
   } else if (status === 'Confirmed') {
-    paymentStatusQuery = ", payment_status = 'paid'";
+    updateData.payment_status = 'paid';
   }
 
   try {
-    const queryText = `
-      UPDATE orders
-      SET delivery_status = $1 ${paymentStatusQuery}
-      WHERE id = $2
-      RETURNING *;
-    `;
-    const result = await pool.query(queryText, [deliveryStatus, orderId]);
-    if (result.rowCount === 0) {
+    const docRef = db.collection('orders').doc(orderId);
+    const docSnap = await docRef.get();
+    if (!docSnap.exists) {
       return res.status(404).json({ success: false, message: 'Order not found.' });
     }
+
+    await docRef.update(updateData);
+    const updatedSnap = await docRef.get();
+
     return res.status(200).json({
       success: true,
       message: `Order status updated to ${status}.`,
-      order: result.rows[0]
+      order: updatedSnap.data()
     });
   } catch (err) {
-    console.error('Error updating order status:', err);
+    console.error('Error updating order status in Firestore:', err);
     return res.status(500).json({ success: false, message: 'Failed to update order status.', error: err.message });
   }
 };
 
-// Manually update payment status (pending, success, Cash)
+// Manually update payment status (pending, success, cash)
 export const updateOrderPaymentStatus = async (req, res) => {
   const { orderId } = req.params;
-  const { paymentStatus } = req.body; // 'pending', 'success', 'cash'
+  const { paymentStatus } = req.body;
 
   if (!paymentStatus) {
     return res.status(400).json({ success: false, message: 'Payment status parameter is required.' });
   }
 
-  // Convert success to 'paid' in DB, cash/pending as is
   const dbStatus = paymentStatus === 'success' ? 'paid' : paymentStatus.toLowerCase();
 
   try {
-    const queryText = `
-      UPDATE orders
-      SET payment_status = $1
-      WHERE id = $2
-      RETURNING *;
-    `;
-    const result = await pool.query(queryText, [dbStatus, orderId]);
-    if (result.rowCount === 0) {
+    const docRef = db.collection('orders').doc(orderId);
+    const docSnap = await docRef.get();
+    if (!docSnap.exists) {
       return res.status(404).json({ success: false, message: 'Order not found.' });
     }
+
+    await docRef.update({ payment_status: dbStatus });
+    const updatedSnap = await docRef.get();
+
     return res.status(200).json({
       success: true,
       message: `Payment status updated to ${paymentStatus}.`,
-      order: result.rows[0]
+      order: updatedSnap.data()
     });
   } catch (err) {
-    console.error('Error updating payment status:', err);
+    console.error('Error updating payment status in Firestore:', err);
     return res.status(500).json({ success: false, message: 'Failed to update payment status.', error: err.message });
   }
 };
 
-// Update delivery status (10 specific statuses)
+// Update delivery status
 export const updateOrderDeliveryStatus = async (req, res) => {
   const { orderId } = req.params;
-  const { deliveryStatus } = req.body; // order confirmed, shipped, dispatched, received to motherhub, received to delivery hub, out for delivery, delivery rescheduled, out for pickup, delivered, cancelled
+  const { deliveryStatus } = req.body;
 
   if (!deliveryStatus) {
     return res.status(400).json({ success: false, message: 'Delivery status parameter is required.' });
   }
 
   try {
-    const queryText = `
-      UPDATE orders
-      SET delivery_status = $1
-      WHERE id = $2
-      RETURNING *;
-    `;
-    const result = await pool.query(queryText, [deliveryStatus, orderId]);
-    if (result.rowCount === 0) {
+    const docRef = db.collection('orders').doc(orderId);
+    const docSnap = await docRef.get();
+    if (!docSnap.exists) {
       return res.status(404).json({ success: false, message: 'Order not found.' });
     }
+
+    await docRef.update({ delivery_status: deliveryStatus });
+    const updatedSnap = await docRef.get();
+
     return res.status(200).json({
       success: true,
       message: `Delivery status updated to ${deliveryStatus}.`,
-      order: result.rows[0]
+      order: updatedSnap.data()
     });
   } catch (err) {
-    console.error('Error updating delivery status:', err);
+    console.error('Error updating delivery status in Firestore:', err);
     return res.status(500).json({ success: false, message: 'Failed to update delivery status.', error: err.message });
   }
 };
@@ -1167,23 +1063,33 @@ export const updateOrderDeliveryStatus = async (req, res) => {
 // Get all custom orders
 export const getCustomOrders = async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM custom_orders ORDER BY created_at DESC');
-    const mapped = result.rows.map(row => ({
-      id: row.id,
-      customerName: row.customer_name,
-      customerEmail: row.customer_email,
-      category: row.category,
-      description: row.description,
-      referenceImageUrl: row.reference_image_url || '',
-      budget: parseFloat(row.budget),
-      requiredDate: row.required_date,
-      status: row.status,
-      calculatedCost: row.calculated_cost ? parseFloat(row.calculated_cost) : null,
-      requestedAt: row.created_at
-    }));
+    let snapshot;
+    try {
+      snapshot = await db.collection('custom_orders').orderBy('requestedAt', 'desc').get();
+    } catch (e) {
+      snapshot = await db.collection('custom_orders').get();
+    }
+
+    const mapped = snapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: data.id || doc.id,
+        customerName: data.customerName || data.customer_name || '',
+        customerEmail: data.customerEmail || data.customer_email || '',
+        category: data.category || '',
+        description: data.description || '',
+        referenceImageUrl: data.referenceImageUrl || data.reference_image_url || '',
+        budget: parseFloat(data.budget || 0),
+        requiredDate: data.requiredDate || data.required_date || '',
+        status: data.status || 'Pending Review',
+        calculatedCost: data.calculatedCost !== undefined && data.calculatedCost !== null ? parseFloat(data.calculatedCost) : (data.calculated_cost !== undefined && data.calculated_cost !== null ? parseFloat(data.calculated_cost) : null),
+        requestedAt: data.requestedAt || data.created_at || new Date().toISOString()
+      };
+    });
+
     return res.status(200).json({ success: true, customOrders: mapped });
   } catch (err) {
-    console.error('Error getting custom orders:', err);
+    console.error('Error getting custom orders from Firestore:', err);
     return res.status(500).json({ success: false, message: 'Failed to retrieve custom orders.', error: err.message });
   }
 };
@@ -1197,16 +1103,25 @@ export const createCustomOrder = async (req, res) => {
 
   const id = 'CUST-' + Math.floor(1000 + Math.random() * 9000);
 
+  const customOrderDoc = {
+    id,
+    customerName,
+    customerEmail,
+    category,
+    description,
+    referenceImageUrl: referenceImageUrl || '',
+    budget: parseFloat(budget),
+    requiredDate: new Date(requiredDate).toISOString(),
+    status: 'Pending Review',
+    calculatedCost: null,
+    requestedAt: new Date().toISOString()
+  };
+
   try {
-    const queryText = `
-      INSERT INTO custom_orders (id, customer_name, customer_email, category, description, reference_image_url, budget, required_date, status)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'Pending Review')
-      RETURNING *;
-    `;
-    const result = await pool.query(queryText, [id, customerName, customerEmail, category, description, referenceImageUrl || null, budget, new Date(requiredDate)]);
-    return res.status(201).json({ success: true, message: 'Custom order request created!', customOrder: result.rows[0] });
+    await db.collection('custom_orders').doc(id).set(customOrderDoc);
+    return res.status(201).json({ success: true, message: 'Custom order request created!', customOrder: customOrderDoc });
   } catch (err) {
-    console.error('Error creating custom order:', err);
+    console.error('Error creating custom order in Firestore:', err);
     return res.status(500).json({ success: false, message: 'Failed to create custom order.', error: err.message });
   }
 };
@@ -1216,34 +1131,23 @@ export const updateCustomOrder = async (req, res) => {
   const { id } = req.params;
   const { status, calculatedCost } = req.body;
 
-  let queryText = 'UPDATE custom_orders SET ';
-  const values = [];
-  let paramIndex = 1;
-
-  if (status !== undefined) {
-    queryText += 'status = $' + paramIndex + ', ';
-    values.push(status);
-    paramIndex++;
-  }
-  if (calculatedCost !== undefined) {
-    queryText += 'calculated_cost = $' + paramIndex + ', ';
-    values.push(calculatedCost);
-    paramIndex++;
-  }
-
-  // Remove trailing comma and space
-  queryText = queryText.slice(0, -2);
-  queryText += ' WHERE id = $' + paramIndex + ' RETURNING *;';
-  values.push(id);
-
   try {
-    const result = await pool.query(queryText, values);
-    if (result.rowCount === 0) {
+    const docRef = db.collection('custom_orders').doc(id);
+    const docSnap = await docRef.get();
+    if (!docSnap.exists) {
       return res.status(404).json({ success: false, message: 'Custom order not found.' });
     }
-    return res.status(200).json({ success: true, message: 'Custom order updated successfully!', customOrder: result.rows[0] });
+
+    const updates = {};
+    if (status !== undefined) updates.status = status;
+    if (calculatedCost !== undefined) updates.calculatedCost = parseFloat(calculatedCost);
+
+    await docRef.update(updates);
+    const updatedSnap = await docRef.get();
+
+    return res.status(200).json({ success: true, message: 'Custom order updated successfully!', customOrder: updatedSnap.data() });
   } catch (err) {
-    console.error('Error updating custom order:', err);
+    console.error('Error updating custom order in Firestore:', err);
     return res.status(500).json({ success: false, message: 'Failed to update custom order.', error: err.message });
   }
 };
@@ -1253,22 +1157,32 @@ export const updateCustomOrder = async (req, res) => {
 // Get all requested orders
 export const getRequestedOrders = async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM requested_orders ORDER BY created_at DESC');
-    const mapped = result.rows.map(row => ({
-      id: row.id,
-      customerName: row.customer_name,
-      customerEmail: row.customer_email,
-      productId: row.product_id,
-      productTitle: row.product_title,
-      quantity: row.quantity,
-      notes: row.notes || '',
-      budget: parseFloat(row.budget),
-      status: row.status,
-      createdAt: row.created_at
-    }));
+    let snapshot;
+    try {
+      snapshot = await db.collection('requested_orders').orderBy('createdAt', 'desc').get();
+    } catch (e) {
+      snapshot = await db.collection('requested_orders').get();
+    }
+
+    const mapped = snapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: data.id || doc.id,
+        customerName: data.customerName || data.customer_name || '',
+        customerEmail: data.customerEmail || data.customer_email || '',
+        productId: data.productId || data.product_id || '',
+        productTitle: data.productTitle || data.product_title || '',
+        quantity: parseInt(data.quantity || 1, 10),
+        notes: data.notes || '',
+        budget: parseFloat(data.budget || 0),
+        status: data.status || 'Pending',
+        createdAt: data.createdAt || data.created_at || new Date().toISOString()
+      };
+    });
+
     return res.status(200).json({ success: true, requestedOrders: mapped });
   } catch (err) {
-    console.error('Error getting requested orders:', err);
+    console.error('Error getting requested orders from Firestore:', err);
     return res.status(500).json({ success: false, message: 'Failed to retrieve requested orders.', error: err.message });
   }
 };
@@ -1282,16 +1196,24 @@ export const createRequestedOrder = async (req, res) => {
 
   const id = 'REQ-' + Math.floor(1000 + Math.random() * 9000);
 
+  const reqDoc = {
+    id,
+    customerName,
+    customerEmail,
+    productId,
+    productTitle,
+    quantity: parseInt(quantity || 1, 10),
+    notes: notes || '',
+    budget: parseFloat(budget),
+    status: 'Pending',
+    createdAt: new Date().toISOString()
+  };
+
   try {
-    const queryText = `
-      INSERT INTO requested_orders (id, customer_name, customer_email, product_id, product_title, quantity, notes, budget, status)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'Pending')
-      RETURNING *;
-    `;
-    const result = await pool.query(queryText, [id, customerName, customerEmail, productId, productTitle, quantity || 1, notes || null, budget]);
-    return res.status(201).json({ success: true, message: 'Requested order submitted!', requestedOrder: result.rows[0] });
+    await db.collection('requested_orders').doc(id).set(reqDoc);
+    return res.status(201).json({ success: true, message: 'Requested order submitted!', requestedOrder: reqDoc });
   } catch (err) {
-    console.error('Error creating requested order:', err);
+    console.error('Error creating requested order in Firestore:', err);
     return res.status(500).json({ success: false, message: 'Failed to create requested order.', error: err.message });
   }
 };
@@ -1306,15 +1228,18 @@ export const updateRequestedOrder = async (req, res) => {
   }
 
   try {
-    const result = await pool.query('UPDATE requested_orders SET status = $1 WHERE id = $2 RETURNING *', [status, id]);
-    if (result.rowCount === 0) {
+    const docRef = db.collection('requested_orders').doc(id);
+    const docSnap = await docRef.get();
+    if (!docSnap.exists) {
       return res.status(404).json({ success: false, message: 'Requested order not found.' });
     }
-    return res.status(200).json({ success: true, message: 'Requested order status updated!', requestedOrder: result.rows[0] });
+
+    await docRef.update({ status });
+    const updatedSnap = await docRef.get();
+
+    return res.status(200).json({ success: true, message: 'Requested order status updated!', requestedOrder: updatedSnap.data() });
   } catch (err) {
-    console.error('Error updating requested order:', err);
+    console.error('Error updating requested order in Firestore:', err);
     return res.status(500).json({ success: false, message: 'Failed to update requested order status.', error: err.message });
   }
 };
-
-

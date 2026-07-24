@@ -1,5 +1,5 @@
 import { v2 as cloudinary } from 'cloudinary';
-import * as db from '../config/db.js';
+import db from '../config/db.js';
 
 // Configure Cloudinary securely
 cloudinary.config({
@@ -8,7 +8,7 @@ cloudinary.config({
   api_secret: 'ac3y2X7_p5NhON6NsMrfbDPPQtw'
 });
 
-// Create a new product in the PostgreSQL database
+// Create a new product in the Firestore database
 export const createProduct = async (req, res) => {
   const {
     id,
@@ -68,48 +68,42 @@ export const createProduct = async (req, res) => {
     });
   }
 
-  const queryText = `
-    INSERT INTO products (
-      id, hsn_code, barcode, sku, title, description, mrp, sale_price, 
-      discount_percentage, ratings, reviews_count, category, sub_category, 
-      availability, stock, tags, addons, occasions, images, add_ons, similar_items
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
-    RETURNING *;
-  `;
+  const productId = id || `PROD-${Math.floor(1000 + Math.random() * 9000)}`;
 
-  const values = [
-    id || `PROD-${Math.floor(1000 + Math.random() * 9000)}`,
-    hsnCode || '',
-    barcode || '',
-    sku || '',
+  const productData = {
+    id: productId,
+    hsnCode: hsnCode || '',
+    barcode: barcode || '',
+    sku: sku || '',
     title,
-    description || '',
-    mrp,
-    salePrice,
-    discountPercentage || 0.0,
-    ratings || 4.5,
-    reviewsCount || 0,
+    description: description || '',
+    mrp: parseFloat(mrp),
+    salePrice: parseFloat(salePrice),
+    discountPercentage: parseFloat(discountPercentage || 0.0),
+    ratings: parseFloat(ratings || 4.5),
+    reviewsCount: parseInt(reviewsCount || 0, 10),
     category,
     subCategory,
     availability,
-    stock,
-    tags || [],
-    addons || {},
-    occasions || [],
-    uploadedUrls,
-    addOns || [],
-    similarItems || []
-  ];
+    stock: parseFloat(stock),
+    tags: tags || [],
+    addons: addons || {},
+    occasions: occasions || [],
+    images: uploadedUrls,
+    addOns: addOns || [],
+    similarItems: similarItems || [],
+    createdAt: new Date().toISOString()
+  };
 
   try {
-    const result = await db.query(queryText, values);
+    await db.collection('products').doc(productId).set(productData, { merge: true });
     return res.status(201).json({
       success: true,
       message: 'Product successfully added to the database!',
-      product: result.rows[0]
+      product: productData
     });
   } catch (err) {
-    console.error('Error inserting product record:', err);
+    console.error('Error inserting product record into Firestore:', err);
     return res.status(500).json({
       success: false,
       message: 'Failed to insert product record in database.',
@@ -118,42 +112,49 @@ export const createProduct = async (req, res) => {
   }
 };
 
-// Retrieve all products from the PostgreSQL database
+// Retrieve all products from the Firestore database
 export const getAllProducts = async (req, res) => {
   try {
-    const result = await db.query('SELECT * FROM products ORDER BY created_at DESC');
-    
-    // Map db camel_case columns to fit frontend class properties
-    const productsMapped = result.rows.map(row => ({
-      id: row.id,
-      hsnCode: row.hsn_code,
-      barcode: row.barcode,
-      sku: row.sku,
-      title: row.title,
-      description: row.description,
-      mrp: parseFloat(row.mrp),
-      salePrice: parseFloat(row.sale_price),
-      discountPercentage: parseFloat(row.discount_percentage || 0.0),
-      ratings: parseFloat(row.ratings || 0.0),
-      reviewsCount: row.reviews_count,
-      category: row.category,
-      subCategory: row.sub_category,
-      availability: row.availability,
-      stock: parseFloat(row.stock || 0.0),
-      tags: row.tags || [],
-      addons: row.addons || {},
-      occasions: row.occasions || [],
-      images: row.images || [],
-      addOns: row.add_ons || [],
-      similarItems: row.similar_items || []
-    }));
+    let snapshot;
+    try {
+      snapshot = await db.collection('products').orderBy('createdAt', 'desc').get();
+    } catch (orderErr) {
+      snapshot = await db.collection('products').get();
+    }
+
+    const productsMapped = snapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: data.id || doc.id,
+        hsnCode: data.hsnCode || '',
+        barcode: data.barcode || '',
+        sku: data.sku || '',
+        title: data.title || '',
+        description: data.description || '',
+        mrp: parseFloat(data.mrp || 0.0),
+        salePrice: parseFloat(data.salePrice || 0.0),
+        discountPercentage: parseFloat(data.discountPercentage || 0.0),
+        ratings: parseFloat(data.ratings || 0.0),
+        reviewsCount: data.reviewsCount || 0,
+        category: data.category || '',
+        subCategory: data.subCategory || '',
+        availability: data.availability || 'available',
+        stock: parseFloat(data.stock || 0.0),
+        tags: data.tags || [],
+        addons: data.addons || {},
+        occasions: data.occasions || [],
+        images: data.images || [],
+        addOns: data.addOns || [],
+        similarItems: data.similarItems || []
+      };
+    });
 
     return res.status(200).json({
       success: true,
       products: productsMapped
     });
   } catch (err) {
-    console.error('Error fetching product records:', err);
+    console.error('Error fetching product records from Firestore:', err);
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch product list.',
@@ -162,7 +163,7 @@ export const getAllProducts = async (req, res) => {
   }
 };
 
-// Update an existing product
+// Update an existing product in Firestore
 export const updateProduct = async (req, res) => {
   const { id } = req.params;
   const {
@@ -220,56 +221,51 @@ export const updateProduct = async (req, res) => {
     });
   }
 
-  const queryText = `
-    UPDATE products
-    SET hsn_code = $1, barcode = $2, sku = $3, title = $4, description = $5, 
-        mrp = $6, sale_price = $7, discount_percentage = $8, ratings = $9, 
-        reviews_count = $10, category = $11, sub_category = $12, availability = $13, 
-        stock = $14, tags = $15, addons = $16, occasions = $17, images = $18, 
-        add_ons = $19, similar_items = $20
-    WHERE id = $21
-    RETURNING *;
-  `;
-
-  const values = [
-    hsnCode || '',
-    barcode || '',
-    sku || '',
-    title,
-    description || '',
-    mrp,
-    salePrice,
-    discountPercentage || 0.0,
-    ratings || 4.5,
-    reviewsCount || 0,
-    category,
-    subCategory,
-    availability,
-    stock,
-    tags || [],
-    addons || {},
-    occasions || [],
-    uploadedUrls,
-    addOns || [],
-    similarItems || [],
-    id
-  ];
-
   try {
-    const result = await db.query(queryText, values);
-    if (result.rowCount === 0) {
+    const docRef = db.collection('products').doc(id);
+    const docSnap = await docRef.get();
+
+    if (!docSnap.exists) {
       return res.status(404).json({
         success: false,
         message: 'Product not found.'
       });
     }
+
+    const updatedData = {
+      hsnCode: hsnCode !== undefined ? hsnCode : (docSnap.data().hsnCode || ''),
+      barcode: barcode !== undefined ? barcode : (docSnap.data().barcode || ''),
+      sku: sku !== undefined ? sku : (docSnap.data().sku || ''),
+      title,
+      description: description !== undefined ? description : (docSnap.data().description || ''),
+      mrp: parseFloat(mrp),
+      salePrice: parseFloat(salePrice),
+      discountPercentage: parseFloat(discountPercentage || 0.0),
+      ratings: parseFloat(ratings || 4.5),
+      reviewsCount: parseInt(reviewsCount || 0, 10),
+      category,
+      subCategory,
+      availability,
+      stock: parseFloat(stock),
+      tags: tags || [],
+      addons: addons || {},
+      occasions: occasions || [],
+      images: uploadedUrls,
+      addOns: addOns || [],
+      similarItems: similarItems || [],
+      updatedAt: new Date().toISOString()
+    };
+
+    await docRef.update(updatedData);
+
+    const finalDoc = await docRef.get();
     return res.status(200).json({
       success: true,
       message: 'Product successfully updated!',
-      product: result.rows[0]
+      product: { id, ...finalDoc.data() }
     });
   } catch (err) {
-    console.error('Error updating product record:', err);
+    console.error('Error updating product record in Firestore:', err);
     return res.status(500).json({
       success: false,
       message: 'Failed to update product record in database.',
@@ -278,24 +274,28 @@ export const updateProduct = async (req, res) => {
   }
 };
 
-// Delete a product
+// Delete a product from Firestore
 export const deleteProduct = async (req, res) => {
   const { id } = req.params;
 
   try {
-    const result = await db.query('DELETE FROM products WHERE id = $1 RETURNING *', [id]);
-    if (result.rowCount === 0) {
+    const docRef = db.collection('products').doc(id);
+    const docSnap = await docRef.get();
+
+    if (!docSnap.exists) {
       return res.status(404).json({
         success: false,
         message: 'Product not found.'
       });
     }
+
+    await docRef.delete();
     return res.status(200).json({
       success: true,
       message: 'Product successfully deleted from database!'
     });
   } catch (err) {
-    console.error('Error deleting product record:', err);
+    console.error('Error deleting product record from Firestore:', err);
     return res.status(500).json({
       success: false,
       message: 'Failed to delete product from database.',
