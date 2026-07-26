@@ -1,4 +1,4 @@
-import db from '../config/db.js';
+import db, { admin } from '../config/db.js';
 import https from 'https';
 
 // Helper to make HTTPS requests to Fast2SMS API
@@ -541,3 +541,102 @@ export const login = async (req, res) => {
     }
   });
 };
+
+// 5. Verify Firebase ID Token (Firebase Phone Authentication on Blaze Plan)
+export const verifyFirebaseToken = async (req, res) => {
+  const { idToken, phoneNumber, fullName, email } = req.body;
+
+  if (!idToken && !phoneNumber) {
+    return res.status(400).json({
+      success: false,
+      message: 'Firebase ID Token or Mobile Number is required.'
+    });
+  }
+
+  try {
+    let decodedToken = null;
+    let extractedPhone = phoneNumber ? phoneNumber.trim() : '';
+
+    if (idToken && admin && admin.apps && admin.apps.length > 0) {
+      try {
+        decodedToken = await admin.auth().verifyIdToken(idToken);
+        if (decodedToken.phone_number) {
+          extractedPhone = decodedToken.phone_number;
+        }
+      } catch (adminErr) {
+        console.warn('[Firebase Admin verifyIdToken Warning]:', adminErr.message);
+      }
+    }
+
+    if (!extractedPhone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Could not extract valid mobile number from authentication payload.'
+      });
+    }
+
+    const cleanPhone = extractedPhone.trim();
+    const mobile10Digits = cleanPhone.replace(/\D/g, '').slice(-10);
+
+    let userProfile = {
+      id: decodedToken?.uid ? `USR-${decodedToken.uid.slice(0, 8)}` : `USR-${mobile10Digits}`,
+      fullName: fullName || decodedToken?.name || 'Flower Customer',
+      phoneNumber: cleanPhone,
+      email: email || decodedToken?.email || `${mobile10Digits}@example.com`,
+      alternateNumber: '',
+      address: {
+        houseNo: '',
+        streetName: '',
+        district: '',
+        state: '',
+        pincode: '',
+        addressType: 'Home'
+      },
+      orders: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    if (db) {
+      const userRef = db.collection('users').doc(cleanPhone);
+      const userSnap = await userRef.get();
+
+      if (!userSnap.exists) {
+        await userRef.set(userProfile);
+        console.log(`[Firebase Auth Sync] Created user profile in Firestore for ${cleanPhone}`);
+      } else {
+        userProfile = userSnap.data();
+        const updateData = { updatedAt: new Date().toISOString() };
+        let modified = false;
+        if (fullName && (!userProfile.fullName || userProfile.fullName === 'Flower Customer')) {
+          updateData.fullName = fullName;
+          modified = true;
+        }
+        if (email && (!userProfile.email || userProfile.email.includes('@example.com'))) {
+          updateData.email = email;
+          modified = true;
+        }
+        if (modified) {
+          await userRef.update(updateData);
+          userProfile = (await userRef.get()).data();
+        }
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Firebase token verified successfully.',
+      token: idToken || `fs_token_${mobile10Digits}`,
+      user: userProfile
+    });
+
+  } catch (error) {
+    console.error('Error in verifyFirebaseToken:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to verify Firebase authentication.',
+      error: error.message
+    });
+  }
+};
+

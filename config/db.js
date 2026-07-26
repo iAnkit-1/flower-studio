@@ -12,6 +12,43 @@ const keyFilePath = path.join(__dirname, 'serviceAccountKey.json');
 
 let db = null;
 
+/**
+ * Safely format and clean RSA Private Key for OpenSSL 3.0 compatibility in Node.js / Vercel
+ */
+function cleanPrivateKey(key) {
+  if (!key || typeof key !== 'string') return '';
+
+  let str = key.trim();
+
+  // 1. Remove wrapping single or double quotes
+  if (
+    (str.startsWith('"') && str.endsWith('"')) ||
+    (str.startsWith("'") && str.endsWith("'"))
+  ) {
+    str = str.slice(1, -1).trim();
+  }
+
+  // 2. Check if string is base64 encoded (for users who base64 encode keys in Vercel)
+  if (!str.includes('-----BEGIN') && !str.includes('\n') && !str.includes('\\n')) {
+    try {
+      const decoded = Buffer.from(str, 'base64').toString('utf8');
+      if (decoded.includes('-----BEGIN')) {
+        str = decoded.trim();
+      }
+    } catch (e) {
+      // Ignore if not base64
+    }
+  }
+
+  // 3. Normalize windows newlines \r\n and \r to standard \n
+  str = str.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  // 4. Convert string literal "\\n" or "\n" to actual newline character \n
+  str = str.replace(/\\n/g, '\n');
+
+  return str.trim();
+}
+
 function initFirebase() {
   if (admin.apps.length > 0) {
     return admin.firestore();
@@ -21,12 +58,23 @@ function initFirebase() {
   if (process.env.FIREBASE_SERVICE_ACCOUNT) {
     try {
       let rawEnv = process.env.FIREBASE_SERVICE_ACCOUNT.trim();
-      if ((rawEnv.startsWith("'") && rawEnv.endsWith("'")) || (rawEnv.startsWith('"') && rawEnv.endsWith('"'))) {
+      if (
+        (rawEnv.startsWith("'") && rawEnv.endsWith("'")) ||
+        (rawEnv.startsWith('"') && rawEnv.endsWith('"'))
+      ) {
         rawEnv = rawEnv.slice(1, -1);
+      }
+      if (!rawEnv.startsWith('{')) {
+        try {
+          const decoded = Buffer.from(rawEnv, 'base64').toString('utf8');
+          if (decoded.startsWith('{')) {
+            rawEnv = decoded;
+          }
+        } catch (e) {}
       }
       const serviceAccount = typeof rawEnv === 'string' ? JSON.parse(rawEnv) : rawEnv;
       if (serviceAccount.private_key) {
-        serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+        serviceAccount.private_key = cleanPrivateKey(serviceAccount.private_key);
       }
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
@@ -46,10 +94,7 @@ function initFirebase() {
 
   if (projectId && clientEmail && privateKey) {
     try {
-      const formattedPrivateKey = privateKey
-        .replace(/\\n/g, '\n')
-        .replace(/^"|"$/g, '')
-        .trim();
+      const formattedPrivateKey = cleanPrivateKey(privateKey);
 
       admin.initializeApp({
         credential: admin.credential.cert({
@@ -70,6 +115,9 @@ function initFirebase() {
   if (fs.existsSync(keyFilePath)) {
     try {
       const serviceAccount = JSON.parse(fs.readFileSync(keyFilePath, 'utf8'));
+      if (serviceAccount.private_key) {
+        serviceAccount.private_key = cleanPrivateKey(serviceAccount.private_key);
+      }
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
       });
