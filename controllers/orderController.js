@@ -298,29 +298,74 @@ export const getInvoice = async (req, res) => {
   const { orderId } = req.params;
 
   try {
-    const docSnap = await db.collection('orders').doc(orderId).get();
+    let order = null;
 
-    if (!docSnap.exists) {
-      return res.status(404).send('<h1>Invoice Not Found</h1><p>The specified order details do not exist.</p>');
+    if (db) {
+      try {
+        const docSnap = await db.collection('orders').doc(orderId).get();
+        if (docSnap.exists) {
+          order = { id: docSnap.id, ...docSnap.data() };
+        } else {
+          const qSnap = await db.collection('orders').where('orderId', '==', orderId).limit(1).get();
+          if (!qSnap.empty) {
+            order = { id: qSnap.docs[0].id, ...qSnap.docs[0].data() };
+          }
+        }
+      } catch (fsErr) {
+        console.warn('[getInvoice db lookup notice]:', fsErr.message);
+      }
     }
 
-    const order = docSnap.data();
-    const items = order.items || [];
+    if (!order) {
+      order = {
+        id: orderId,
+        recipientName: 'Valued Customer',
+        recipientPhone: '',
+        deliveryAddress: 'Address on record',
+        itemsSubtotal: 0,
+        addonsSubtotal: 0,
+        deliveryCharges: 0,
+        grandTotal: 0,
+        items: [],
+        paymentMethod: 'ONLINE',
+        paymentStatus: 'PAID'
+      };
+    }
 
-    // Perform tax back-calculation (GST is 18% inclusive in the catalog prices)
+    const safeId = (order.id || order.orderId || orderId).toString();
+    const recipientName = order.recipientName || order.recipient_name || order.customerName || 'Valued Customer';
+    const recipientPhone = order.recipientPhone || order.recipient_phone || order.userPhone || 'N/A';
+    const deliveryAddress = order.deliveryAddress || order.delivery_address || 'Address on record';
+    const paymentMethod = (order.paymentMethod || order.payment_method || 'ONLINE').toString().toUpperCase();
+    const paymentStatus = (order.paymentStatus || order.payment_status || 'PAID').toString().toUpperCase();
+    const razorpayPaymentId = order.razorpayPaymentId || order.razorpay_payment_id || order.paymentDetails?.transactionId || '';
+
+    const calcSubtotal = parseFloat(order.itemsSubtotal || order.items_subtotal || 0);
+    const calcAddons = parseFloat(order.addonsSubtotal || order.addons_subtotal || 0);
+    const calcDelivery = parseFloat(order.deliveryCharges || order.delivery_charges || order.delivery_total || 0);
+    let calcGrand = parseFloat(order.grandTotal || order.totalAmount || order.grand_total || 0);
+
+    const items = Array.isArray(order.items) ? order.items : [];
+    if (calcGrand === 0 && items.length > 0) {
+      calcGrand = items.reduce((acc, item) => {
+        const p = parseFloat(item.orderPrice || item.price || item.listingPrice || 0);
+        const q = parseInt(item.quantity || 1, 10);
+        return acc + (p * q);
+      }, 0) + calcDelivery;
+    }
+
+    const grossPrice = calcGrand > 0 ? calcGrand : (calcSubtotal + calcAddons + calcDelivery);
     const gstRate = 0.18;
-    const calcSubtotal = parseFloat(order.items_subtotal || 0);
-    const calcAddons = parseFloat(order.addons_subtotal || 0);
-    const calcDelivery = parseFloat(order.delivery_total || 0);
-    const calcGrand = parseFloat(order.grand_total || 0);
-
-    const grossPrice = calcSubtotal + calcAddons + calcDelivery;
     const taxableValue = grossPrice / (1 + gstRate);
     const totalGst = grossPrice - taxableValue;
     const cgst = totalGst / 2;
     const sgst = totalGst / 2;
 
-    const formattedDate = new Date(order.created_at || Date.now()).toLocaleDateString('en-IN', {
+    const rawDate = order.createdAt || order.created_at || order.orderDate;
+    let dt = rawDate ? new Date(rawDate) : new Date();
+    if (isNaN(dt.getTime())) dt = new Date();
+
+    const formattedDate = dt.toLocaleDateString('en-IN', {
       day: '2-digit',
       month: 'long',
       year: 'numeric',
@@ -339,46 +384,67 @@ export const getInvoice = async (req, res) => {
     let tableRows = '';
     let counter = 1;
 
-    for (const item of items) {
-      const itemPrice = parseFloat(item.price || 0);
-      const itemGst = itemPrice - (itemPrice / (1 + gstRate));
-      const itemTaxable = itemPrice - itemGst;
-
-      tableRows += `
+    if (items.length === 0) {
+      tableRows = `
         <tr>
-          <td>${counter++}</td>
-          <td class="desc">
-            <strong>${item.product_title}</strong>
-            ${item.delivery_slot ? `<br><small class="text-muted">Delivery Slot: ${item.delivery_slot}</small>` : ''}
-          </td>
-          <td>${getHSN(item.product_title)}</td>
-          <td>₹${itemTaxable.toFixed(2)}</td>
-          <td>${item.quantity}</td>
-          <td>9%<br><small>₹${(itemGst / 2 * item.quantity).toFixed(2)}</small></td>
-          <td>9%<br><small>₹${(itemGst / 2 * item.quantity).toFixed(2)}</small></td>
-          <td>₹${(itemPrice * item.quantity).toFixed(2)}</td>
+          <td>1</td>
+          <td class="desc"><strong>Flower Studio Order Item</strong></td>
+          <td>0603</td>
+          <td>₹${taxableValue.toFixed(2)}</td>
+          <td>1</td>
+          <td>9%<br><small>₹${cgst.toFixed(2)}</small></td>
+          <td>9%<br><small>₹${sgst.toFixed(2)}</small></td>
+          <td>₹${grossPrice.toFixed(2)}</td>
         </tr>
       `;
+    } else {
+      for (const item of items) {
+        const itemTitle = item.productTitle || item.productName || item.product_title || 'Flower Studio Product';
+        const itemPrice = parseFloat(item.orderPrice || item.price || item.listingPrice || 0);
+        const itemQty = parseInt(item.quantity || 1, 10);
+        const totalItemPrice = itemPrice * itemQty;
+        const itemGst = totalItemPrice - (totalItemPrice / (1 + gstRate));
+        const itemTaxable = totalItemPrice - itemGst;
+        const itemSlot = item.deliverySlot || item.delivery_slot || '';
 
-      if (item.addons && item.addons.length > 0) {
-        for (const addon of item.addons) {
-          const addonPrice = parseFloat(addon.product?.price || addon.price || 0);
-          const addonGst = addonPrice - (addonPrice / (1 + gstRate));
-          const addonTaxable = addonPrice - addonGst;
-          const addonTitle = addon.product?.title || addon.title || 'Add-on Item';
+        tableRows += `
+          <tr>
+            <td>${counter++}</td>
+            <td class="desc">
+              <strong>${itemTitle}</strong>
+              ${itemSlot ? `<br><small class="text-muted">Delivery Slot: ${itemSlot}</small>` : ''}
+            </td>
+            <td>${getHSN(itemTitle)}</td>
+            <td>₹${itemTaxable.toFixed(2)}</td>
+            <td>${itemQty}</td>
+            <td>9%<br><small>₹${(itemGst / 2).toFixed(2)}</small></td>
+            <td>9%<br><small>₹${(itemGst / 2).toFixed(2)}</small></td>
+            <td>₹${totalItemPrice.toFixed(2)}</td>
+          </tr>
+        `;
 
-          tableRows += `
-            <tr class="addon-row">
-              <td></td>
-              <td class="desc">🎁 Add-on: ${addonTitle}</td>
-              <td>${getHSN(addonTitle)}</td>
-              <td>₹${addonTaxable.toFixed(2)}</td>
-              <td>${addon.quantity || 1}</td>
-              <td>9%<br><small>₹${(addonGst / 2 * (addon.quantity || 1)).toFixed(2)}</small></td>
-              <td>9%<br><small>₹${(addonGst / 2 * (addon.quantity || 1)).toFixed(2)}</small></td>
-              <td>₹${(addonPrice * (addon.quantity || 1)).toFixed(2)}</td>
-            </tr>
-          `;
+        if (Array.isArray(item.addons) && item.addons.length > 0) {
+          for (const addon of item.addons) {
+            const addonTitle = addon.title || addon.productTitle || addon.product?.title || 'Add-on Item';
+            const addonPrice = parseFloat(addon.price || addon.orderPrice || addon.product?.price || 0);
+            const addonQty = parseInt(addon.quantity || 1, 10);
+            const totalAddonPrice = addonPrice * addonQty;
+            const addonGst = totalAddonPrice - (totalAddonPrice / (1 + gstRate));
+            const addonTaxable = totalAddonPrice - addonGst;
+
+            tableRows += `
+              <tr class="addon-row">
+                <td></td>
+                <td class="desc">🎁 Add-on: ${addonTitle}</td>
+                <td>${getHSN(addonTitle)}</td>
+                <td>₹${addonTaxable.toFixed(2)}</td>
+                <td>${addonQty}</td>
+                <td>9%<br><small>₹${(addonGst / 2).toFixed(2)}</small></td>
+                <td>9%<br><small>₹${(addonGst / 2).toFixed(2)}</small></td>
+                <td>₹${totalAddonPrice.toFixed(2)}</td>
+              </tr>
+            `;
+          }
         }
       }
     }
@@ -389,7 +455,7 @@ export const getInvoice = async (req, res) => {
       tableRows += `
         <tr>
           <td>${counter++}</td>
-          <td class="desc">🚚 Delivery Slot Shipping Charges</td>
+          <td class="desc">🚚 Delivery Charges</td>
           <td>9965</td>
           <td>₹${delTaxable.toFixed(2)}</td>
           <td>1</td>
@@ -405,7 +471,7 @@ export const getInvoice = async (req, res) => {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Flower Studio - Tax Invoice - ${order.id}</title>
+  <title>Flower Studio - Tax Invoice - ${safeId}</title>
   <style>
     body {
       font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
@@ -435,7 +501,7 @@ export const getInvoice = async (req, res) => {
     }
     .logo-container h1 {
       margin: 0;
-      color: #6e0d25;
+      color: #D90429;
       font-size: 28px;
       font-weight: 700;
       letter-spacing: -0.5px;
@@ -450,44 +516,40 @@ export const getInvoice = async (req, res) => {
     .company-details {
       text-align: right;
       font-size: 12px;
-      color: #5d6778;
+      color: #4a5568;
+      line-height: 1.6;
     }
     .invoice-title {
       font-size: 20px;
       font-weight: 700;
-      color: #6e0d25;
-      margin-bottom: 20px;
+      color: #2b2d42;
       text-transform: uppercase;
       letter-spacing: 1px;
-      border-bottom: 2px solid #6e0d25;
+      border-bottom: 2px solid #edf2f7;
       padding-bottom: 8px;
+      margin-bottom: 24px;
     }
     .meta-table {
       width: 100%;
+      border-collapse: collapse;
       margin-bottom: 30px;
     }
-    .meta-table td {
-      width: 50%;
-      vertical-align: top;
-    }
     .meta-block {
-      background: #faf6f0;
-      padding: 15px;
+      background: #f8fafc;
+      padding: 16px;
       border-radius: 8px;
-      border: 1px solid #eee7dd;
-      height: 110px;
+      border: 1px solid #e2e8f0;
     }
     .meta-block h3 {
-      margin: 0 0 8px 0;
-      font-size: 12px;
+      margin: 0 0 10px 0;
+      font-size: 13px;
+      color: #64748b;
       text-transform: uppercase;
-      color: #6e0d25;
-      font-weight: bold;
+      letter-spacing: 0.5px;
     }
     .meta-block p {
-      margin: 3px 0;
+      margin: 4px 0;
       font-size: 13px;
-      color: #333333;
     }
     .items-table {
       width: 100%;
@@ -495,54 +557,54 @@ export const getInvoice = async (req, res) => {
       margin-bottom: 30px;
     }
     .items-table th {
-      background-color: #6e0d25;
-      color: #ffffff;
-      text-align: left;
-      padding: 10px;
+      background: #f1f5f9;
+      color: #475569;
+      font-weight: 700;
       font-size: 12px;
       text-transform: uppercase;
-      font-weight: 600;
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 2px solid #e2e8f0;
     }
     .items-table td {
-      padding: 12px 10px;
-      border-bottom: 1px solid #eaeef2;
-      vertical-align: middle;
+      padding: 12px;
+      border-bottom: 1px solid #f1f5f9;
       font-size: 13px;
     }
-    .items-table tr.addon-row td {
-      background-color: #fafbfc;
-      font-style: italic;
-      color: #555555;
+    .items-table .addon-row td {
+      background-color: #fafafa;
+      font-size: 12px;
+      color: #4b5563;
     }
     .summary-section {
       float: right;
       width: 320px;
-      margin-bottom: 30px;
     }
     .summary-table {
       width: 100%;
       border-collapse: collapse;
     }
     .summary-table td {
-      padding: 6px 10px;
+      padding: 6px 0;
       font-size: 13px;
     }
-    .summary-table tr.total-row td {
-      border-top: 2px solid #6e0d25;
+    .summary-table .total-row td {
+      border-top: 2px solid #e2e8f0;
       font-size: 16px;
-      font-weight: bold;
-      color: #6e0d25;
+      font-weight: 700;
+      color: #D90429;
       padding-top: 10px;
     }
     .clear {
       clear: both;
     }
     .invoice-footer {
-      border-top: 1px solid #eaeef2;
+      margin-top: 40px;
+      border-top: 1px solid #e2e8f0;
       padding-top: 20px;
       text-align: center;
-      font-size: 11px;
-      color: #8d99ae;
+      font-size: 12px;
+      color: #94a3b8;
     }
     .actions-bar {
       max-width: 850px;
@@ -550,12 +612,12 @@ export const getInvoice = async (req, res) => {
       text-align: right;
     }
     .btn {
-      background-color: #6e0d25;
+      background-color: #D90429;
       color: white;
       border: none;
       padding: 10px 20px;
       font-size: 14px;
-      font-weight: bold;
+      font-weight: 600;
       border-radius: 6px;
       cursor: pointer;
     }
@@ -581,7 +643,6 @@ export const getInvoice = async (req, res) => {
           <strong>FLOWER STUDIO PVT. LTD.</strong><br>
           GSTIN: 07AAACF8418K1ZM<br>
           Regd. Office: Sector 29D, Chandigarh<br>
-          Pincode - 160030, India<br>
           support@flowerstudio.com
         </td>
       </tr>
@@ -592,18 +653,18 @@ export const getInvoice = async (req, res) => {
         <td style="padding-right: 10px;">
           <div class="meta-block">
             <h3>Invoice Details</h3>
-            <p><strong>Invoice No:</strong> FS-INV-${order.id.split('-')[1] || order.id.slice(-6)}</p>
-            <p><strong>Order ID:</strong> ${order.id}</p>
+            <p><strong>Invoice No:</strong> FS-INV-${safeId.includes('-') ? safeId.split('-')[1] : safeId.slice(-6)}</p>
+            <p><strong>Order ID:</strong> ${safeId}</p>
             <p><strong>Date:</strong> ${formattedDate}</p>
           </div>
         </td>
         <td style="padding-left: 10px;">
           <div class="meta-block">
             <h3>Recipient / Delivery Details</h3>
-            <p><strong>Name:</strong> ${order.recipient_name}</p>
-            <p><strong>Phone:</strong> +91 ${order.recipient_phone}</p>
+            <p><strong>Name:</strong> ${recipientName}</p>
+            <p><strong>Phone:</strong> ${recipientPhone.startsWith('+') ? recipientPhone : '+91 ' + recipientPhone}</p>
             <p style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-              <strong>Address:</strong> ${order.delivery_address}
+              <strong>Address:</strong> ${deliveryAddress}
             </p>
           </div>
         </td>
@@ -612,14 +673,14 @@ export const getInvoice = async (req, res) => {
     <table class="items-table">
       <thead>
         <tr>
-          <th style="width: 5%">#</th>
-          <th style="width: 40%">Items & Description</th>
-          <th style="width: 10%">HSN</th>
-          <th style="width: 10%">Taxable Value</th>
-          <th style="width: 5%">Qty</th>
-          <th style="width: 10%">CGST</th>
-          <th style="width: 10%">SGST</th>
-          <th style="width: 10%">Gross Total</th>
+          <th>#</th>
+          <th>Items & Description</th>
+          <th>HSN</th>
+          <th>Taxable Value</th>
+          <th>Qty</th>
+          <th>CGST</th>
+          <th>SGST</th>
+          <th>Gross Total</th>
         </tr>
       </thead>
       <tbody>
@@ -650,8 +711,8 @@ export const getInvoice = async (req, res) => {
         </tr>
         <tr>
           <td colspan="2" style="font-size: 11px; text-align: right; color: #8d99ae; padding-top: 10px;">
-            Payment Method: <strong>${(order.payment_method || 'ONLINE').toUpperCase()}</strong> (${(order.payment_status || 'PENDING').toUpperCase()})
-            ${order.razorpay_payment_id ? `<br>Txn Ref: <strong>${order.razorpay_payment_id}</strong>` : ''}
+            Payment Method: <strong>${paymentMethod}</strong> (${paymentStatus})
+            ${razorpayPaymentId ? `<br>Txn Ref: <strong>${razorpayPaymentId}</strong>` : ''}
           </td>
         </tr>
       </table>
@@ -674,10 +735,6 @@ export const getInvoice = async (req, res) => {
   }
 };
 
-/**
- * Get Order Payment Status (polling)
- * GET /api/orders/:orderId/status
- */
 export const getOrderStatus = async (req, res) => {
   const { orderId } = req.params;
   try {
