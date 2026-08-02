@@ -1,182 +1,52 @@
 import db, { admin } from '../config/db.js';
-import https from 'https';
 
-// Helper to make HTTPS requests to Fast2SMS API
-const makeFast2SMSRequest = (path, postData) => {
-  return new Promise((resolve, reject) => {
-    const apiKey = process.env.FAST2SMS_API_KEY;
-    if (!apiKey) {
-      return resolve({ success: false, message: 'FAST2SMS_API_KEY is not configured in .env' });
-    }
+/**
+ * 1. Verify Firebase ID Token
+ * Used for both Firebase Phone Auth and Google Sign-In.
+ * Decodes the Firebase ID token and syncs/merges the user profile into Firestore.
+ */
+export const verifyFirebaseToken = async (req, res) => {
+  const { idToken, phoneNumber, fullName, email } = req.body;
 
-    const payload = JSON.stringify(postData);
-    const req = https.request({
-      hostname: 'www.fast2sms.com',
-      path: path,
-      method: 'POST',
-      headers: {
-        'authorization': apiKey,
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(payload)
-      }
-    }, (res) => {
-      let body = '';
-      res.on('data', (chunk) => body += chunk);
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(body);
-          console.log(`[Fast2SMS Response] ${path}:`, parsed);
-          resolve(parsed);
-        } catch (e) {
-          console.error('[Fast2SMS Parse Error]:', body);
-          resolve({ return: false, message: 'Invalid response from Fast2SMS' });
-        }
-      });
-    });
-
-    req.on('error', (err) => {
-      console.error('[Fast2SMS Request Error]:', err.message);
-      reject(err);
-    });
-
-    req.write(payload);
-    req.end();
-  });
-};
-
-// 1. Send OTP (Fast2SMS /dev/otp/send + Firestore session sync)
-export const sendOtp = async (req, res) => {
-  const { phoneNumber } = req.body;
-
-  if (!phoneNumber) {
+  if (!idToken && !phoneNumber) {
     return res.status(400).json({
       success: false,
-      message: 'Mobile number is required.'
+      message: 'Firebase ID Token or Mobile Number is required.'
     });
   }
-
-  const cleanPhone = phoneNumber.trim();
-  const mobile10Digits = cleanPhone.replace(/\D/g, '').slice(-10);
-
-  if (mobile10Digits.length !== 10) {
-    return res.status(400).json({
-      success: false,
-      message: 'Please provide a valid 10-digit Indian mobile number.'
-    });
-  }
-
-  const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
   try {
-    // 1. Save session to Firestore otp_sessions
-    if (db) {
-      await db.collection('otp_sessions').doc(cleanPhone).set({
-        phoneNumber: cleanPhone,
-        mobile: mobile10Digits,
-        otp: generatedOtp,
-        expiresAt,
-        createdAt: new Date().toISOString()
-      });
-    }
+    let decodedToken = null;
+    let extractedPhone = phoneNumber ? phoneNumber.trim() : '';
 
-    console.log(`[SEND OTP] Mobile: ${mobile10Digits} | Code: ${generatedOtp}`);
-
-    // 2. Trigger Fast2SMS /dev/otp/send if API Key & OTP ID present
-    let smsResult = null;
-    if (process.env.FAST2SMS_API_KEY) {
-      const otpId = process.env.FAST2SMS_OTP_ID || 'flower_studio_otp';
-      smsResult = await makeFast2SMSRequest('/dev/otp/send', {
-        mobile: mobile10Digits,
-        otp_id: otpId,
-        otp: generatedOtp,
-        otp_expiry: 10,
-        otp_length: 6
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: smsResult?.message || `OTP generated and sent to +91 ${mobile10Digits}.`,
-      otp: generatedOtp,
-      expiresAt,
-      fast2sms: smsResult
-    });
-  } catch (error) {
-    console.error('Error in sendOtp:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to send OTP.',
-      error: error.message
-    });
-  }
-};
-
-// 2. Verify OTP (Fast2SMS /dev/otp/verify + Firestore otp_sessions verification)
-export const verifyOtp = async (req, res) => {
-  const { phoneNumber, otp, fullName, email } = req.body;
-
-  if (!phoneNumber || !otp) {
-    return res.status(400).json({
-      success: false,
-      message: 'Mobile number and OTP are required.'
-    });
-  }
-
-  const cleanPhone = phoneNumber.trim();
-  const mobile10Digits = cleanPhone.replace(/\D/g, '').slice(-10);
-  const enteredOtp = otp.toString().trim();
-
-  try {
-    let isValidOtp = false;
-
-    // A. Check Fast2SMS verify API first if configured
-    if (process.env.FAST2SMS_API_KEY) {
+    if (idToken && admin && admin.apps && admin.apps.length > 0) {
       try {
-        const smsVerifyRes = await makeFast2SMSRequest('/dev/otp/verify', {
-          mobile: mobile10Digits,
-          otp: enteredOtp
-        });
-        if (smsVerifyRes?.return === true || smsVerifyRes?.status_code === 200) {
-          isValidOtp = true;
+        decodedToken = await admin.auth().verifyIdToken(idToken);
+        if (decodedToken.phone_number) {
+          extractedPhone = decodedToken.phone_number;
         }
-      } catch (err) {
-        console.warn('Fast2SMS verify check error, checking Firestore fallback:', err.message);
+      } catch (adminErr) {
+        console.warn('[Firebase Admin verifyIdToken Warning]:', adminErr.message);
       }
     }
 
-    // B. Check Firestore otp_sessions
-    if (!isValidOtp && db) {
-      const otpSnap = await db.collection('otp_sessions').doc(cleanPhone).get();
-      if (otpSnap.exists) {
-        const otpData = otpSnap.data();
-        const now = new Date();
-        const expiry = new Date(otpData.expiresAt);
+    let docId = extractedPhone ? extractedPhone.trim() : (decodedToken?.uid || email || decodedToken?.email);
 
-        if (now <= expiry && otpData.otp === enteredOtp) {
-          isValidOtp = true;
-        }
-      }
-    }
-
-    // C. Static fallback for 123456 demo testing
-    if (!isValidOtp && enteredOtp === '123456') {
-      isValidOtp = true;
-    }
-
-    if (!isValidOtp) {
+    if (!docId) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid OTP entered. Please check the 6-digit code and try again.'
+        message: 'Could not extract valid phone number or user identity from authentication payload.'
       });
     }
 
-    // OTP Verified! Fetch or create user profile in Firestore 'users' collection
+    const cleanPhone = extractedPhone ? extractedPhone.trim() : '';
+    const mobile10Digits = cleanPhone ? cleanPhone.replace(/\D/g, '').slice(-10) : '';
+
     let userProfile = {
-      id: `USR-${mobile10Digits}`,
-      fullName: fullName || 'Flower Customer',
+      id: decodedToken?.uid ? `USR-${decodedToken.uid.slice(0, 8)}` : (mobile10Digits ? `USR-${mobile10Digits}` : `USR-${Date.now()}`),
+      fullName: fullName || decodedToken?.name || '',
       phoneNumber: cleanPhone,
-      email: email || `${mobile10Digits}@example.com`,
+      email: email || decodedToken?.email || '',
       alternateNumber: '',
       address: {
         houseNo: '',
@@ -192,110 +62,78 @@ export const verifyOtp = async (req, res) => {
     };
 
     if (db) {
-      const userRef = db.collection('users').doc(cleanPhone);
+      const userRef = db.collection('users').doc(docId);
       const userSnap = await userRef.get();
 
       if (!userSnap.exists) {
         await userRef.set(userProfile);
-        console.log(`Created new Firestore user profile for ${cleanPhone}`);
+        console.log(`[Firebase Auth Sync] Created user profile in Firestore for ${docId}`);
       } else {
         userProfile = userSnap.data();
-        if (fullName || email) {
-          const updateData = { updatedAt: new Date().toISOString() };
-          if (fullName) updateData.fullName = fullName;
-          if (email) updateData.email = email;
+        const updateData = { updatedAt: new Date().toISOString() };
+        let modified = false;
+        if (fullName && !userProfile.fullName) {
+          updateData.fullName = fullName;
+          modified = true;
+        }
+        if (email && !userProfile.email) {
+          updateData.email = email;
+          modified = true;
+        }
+        if (modified) {
           await userRef.update(updateData);
           userProfile = (await userRef.get()).data();
+        }
+      }
+
+      // If Firebase User UID is decoded, merge entry indexed by User UID
+      if (decodedToken && decodedToken.uid && docId !== decodedToken.uid) {
+        const uidRef = db.collection('users').doc(decodedToken.uid);
+        const uidSnap = await uidRef.get();
+        if (!uidSnap.exists) {
+          await uidRef.set({
+            uid: decodedToken.uid,
+            phoneNumber: cleanPhone,
+            provider: cleanPhone ? 'phone' : 'google',
+            fullName: userProfile.fullName || '',
+            email: userProfile.email || '',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          });
+          console.log(`[Firebase Auth Sync] Created UID user entry in Firestore for ${decodedToken.uid}`);
+        } else {
+          await uidRef.update({ updatedAt: new Date().toISOString() });
         }
       }
     }
 
     return res.status(200).json({
       success: true,
-      message: 'OTP verified successfully.',
-      token: `fs_token_${mobile10Digits}`,
+      message: 'Firebase token verified successfully.',
+      token: idToken || `fs_token_${mobile10Digits || decodedToken?.uid}`,
       user: userProfile
     });
 
   } catch (error) {
-    console.error('Error verifying OTP:', error);
+    console.error('Error in verifyFirebaseToken:', error);
     return res.status(500).json({
       success: false,
-      message: 'Failed to verify OTP.',
+      message: 'Failed to verify Firebase authentication.',
       error: error.message
     });
   }
 };
 
-// 3. Resend OTP (Fast2SMS /dev/otp/resend + Firestore session extension)
-export const resendOtp = async (req, res) => {
-  const { phoneNumber } = req.body;
-
-  if (!phoneNumber) {
-    return res.status(400).json({
-      success: false,
-      message: 'Mobile number is required.'
-    });
-  }
-
-  const cleanPhone = phoneNumber.trim();
-  const mobile10Digits = cleanPhone.replace(/\D/g, '').slice(-10);
-
-  try {
-    let existingOtp = '123456';
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-
-    if (db) {
-      const otpSnap = await db.collection('otp_sessions').doc(cleanPhone).get();
-      if (otpSnap.exists) {
-        existingOtp = otpSnap.data().otp || Math.floor(100000 + Math.random() * 900000).toString();
-      } else {
-        existingOtp = Math.floor(100000 + Math.random() * 900000).toString();
-      }
-
-      await db.collection('otp_sessions').doc(cleanPhone).set({
-        phoneNumber: cleanPhone,
-        mobile: mobile10Digits,
-        otp: existingOtp,
-        expiresAt,
-        updatedAt: new Date().toISOString()
-      }, { merge: true });
-    }
-
-    console.log(`[RESEND OTP] Mobile: ${mobile10Digits} | Code: ${existingOtp}`);
-
-    let smsResult = null;
-    if (process.env.FAST2SMS_API_KEY) {
-      smsResult = await makeFast2SMSRequest('/dev/otp/resend', {
-        mobile: mobile10Digits
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: smsResult?.message || `OTP resent successfully to +91 ${mobile10Digits}.`,
-      otp: existingOtp,
-      expiresAt,
-      fast2sms: smsResult
-    });
-  } catch (error) {
-    console.error('Error resending OTP:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to resend OTP.',
-      error: error.message
-    });
-  }
-};
-
-// Retrieve User Profile by Mobile Number
+/**
+ * 2. Retrieve User Profile by Mobile Number or User ID
+ */
 export const getUserProfile = async (req, res) => {
   const { phoneNumber } = req.params;
 
   if (!phoneNumber) {
     return res.status(400).json({
       success: false,
-      message: 'Mobile number is required.'
+      message: 'Mobile number or User ID is required.'
     });
   }
 
@@ -342,7 +180,9 @@ export const getUserProfile = async (req, res) => {
   }
 };
 
-// Update User Profile and Address in Firestore
+/**
+ * 3. Update User Profile and Address in Firestore
+ */
 export const updateUserProfile = async (req, res) => {
   const {
     phoneNumber,
@@ -427,7 +267,9 @@ export const updateUserProfile = async (req, res) => {
   }
 };
 
-// Add Order Details to User Profile in Firestore
+/**
+ * 4. Add Order Details to User Profile in Firestore
+ */
 export const addUserOrder = async (req, res) => {
   const {
     phoneNumber,
@@ -518,7 +360,9 @@ export const addUserOrder = async (req, res) => {
   }
 };
 
-// Legacy auth login bypass
+/**
+ * 5. Legacy Auth Login Bypass
+ */
 export const login = async (req, res) => {
   const { email, password } = req.body;
 
@@ -528,8 +372,6 @@ export const login = async (req, res) => {
       message: 'Please provide email and password.'
     });
   }
-
-  console.log(`Bypass auth request for email: ${email}`);
 
   return res.status(200).json({
     success: true,
@@ -542,101 +384,26 @@ export const login = async (req, res) => {
   });
 };
 
-// 5. Verify Firebase ID Token (Firebase Phone Authentication on Blaze Plan)
-export const verifyFirebaseToken = async (req, res) => {
-  const { idToken, phoneNumber, fullName, email } = req.body;
-
-  if (!idToken && !phoneNumber) {
-    return res.status(400).json({
-      success: false,
-      message: 'Firebase ID Token or Mobile Number is required.'
-    });
-  }
-
-  try {
-    let decodedToken = null;
-    let extractedPhone = phoneNumber ? phoneNumber.trim() : '';
-
-    if (idToken && admin && admin.apps && admin.apps.length > 0) {
-      try {
-        decodedToken = await admin.auth().verifyIdToken(idToken);
-        if (decodedToken.phone_number) {
-          extractedPhone = decodedToken.phone_number;
-        }
-      } catch (adminErr) {
-        console.warn('[Firebase Admin verifyIdToken Warning]:', adminErr.message);
-      }
-    }
-
-    if (!extractedPhone) {
-      return res.status(400).json({
-        success: false,
-        message: 'Could not extract valid mobile number from authentication payload.'
-      });
-    }
-
-    const cleanPhone = extractedPhone.trim();
-    const mobile10Digits = cleanPhone.replace(/\D/g, '').slice(-10);
-
-    let userProfile = {
-      id: decodedToken?.uid ? `USR-${decodedToken.uid.slice(0, 8)}` : `USR-${mobile10Digits}`,
-      fullName: fullName || decodedToken?.name || 'Flower Customer',
-      phoneNumber: cleanPhone,
-      email: email || decodedToken?.email || `${mobile10Digits}@example.com`,
-      alternateNumber: '',
-      address: {
-        houseNo: '',
-        streetName: '',
-        district: '',
-        state: '',
-        pincode: '',
-        addressType: 'Home'
-      },
-      orders: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-
-    if (db) {
-      const userRef = db.collection('users').doc(cleanPhone);
-      const userSnap = await userRef.get();
-
-      if (!userSnap.exists) {
-        await userRef.set(userProfile);
-        console.log(`[Firebase Auth Sync] Created user profile in Firestore for ${cleanPhone}`);
-      } else {
-        userProfile = userSnap.data();
-        const updateData = { updatedAt: new Date().toISOString() };
-        let modified = false;
-        if (fullName && (!userProfile.fullName || userProfile.fullName === 'Flower Customer')) {
-          updateData.fullName = fullName;
-          modified = true;
-        }
-        if (email && (!userProfile.email || userProfile.email.includes('@example.com'))) {
-          updateData.email = email;
-          modified = true;
-        }
-        if (modified) {
-          await userRef.update(updateData);
-          userProfile = (await userRef.get()).data();
-        }
-      }
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: 'Firebase token verified successfully.',
-      token: idToken || `fs_token_${mobile10Digits}`,
-      user: userProfile
-    });
-
-  } catch (error) {
-    console.error('Error in verifyFirebaseToken:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to verify Firebase authentication.',
-      error: error.message
-    });
-  }
+/**
+ * Legacy OTP Stubs (Maintained for backwards compatibility)
+ */
+export const sendOtp = async (req, res) => {
+  return res.status(200).json({
+    success: true,
+    message: 'Firebase Phone Authentication is active. Please authenticate via Firebase Auth.'
+  });
 };
 
+export const verifyOtp = async (req, res) => {
+  return res.status(200).json({
+    success: true,
+    message: 'Firebase Phone Authentication is active. Please send Firebase ID Token to /api/auth/verify-firebase-token.'
+  });
+};
+
+export const resendOtp = async (req, res) => {
+  return res.status(200).json({
+    success: true,
+    message: 'Firebase Phone Authentication is active.'
+  });
+};
