@@ -971,47 +971,62 @@ export const getAllOrders = async (req, res) => {
   try {
     let snapshot;
     try {
-      snapshot = await db.collection('orders').orderBy('created_at', 'desc').get();
+      snapshot = await db.collection('orders').orderBy('createdAt', 'desc').get();
     } catch (e) {
+      snapshot = await db.collection('orders').get();
+    }
+
+    if (!snapshot || snapshot.empty) {
       snapshot = await db.collection('orders').get();
     }
 
     const mapped = snapshot.docs.map(doc => {
       const data = doc.data();
       const items = data.items || [];
-      const recipientName = data.recipient_name || data.customerName || 'Customer';
+      const recipientName = data.recipientName || data.recipient_name || data.customerName || 'Customer';
 
       return {
-        id: data.id || doc.id,
-        orderId: data.id || doc.id,
+        ...data, // Include all original raw fields from Firestore
+        id: data.orderId || data.id || doc.id,
+        orderId: data.orderId || data.id || doc.id,
+        userId: data.userId || '',
+        userPhone: data.userPhone || '',
         customerName: recipientName,
         customerEmail: data.customerEmail || (recipientName !== 'Customer' ? recipientName.toLowerCase().replace(/\s+/g, '') + '@example.com' : 'customer@example.com'),
-        recipientPhone: data.recipient_phone || data.userPhone || '',
-        totalAmount: parseFloat(data.grand_total || data.totalAmount || 0),
-        grandTotal: parseFloat(data.grand_total || data.totalAmount || 0),
-        orderDate: data.created_at || data.createdAt || new Date().toISOString(),
-        createdAt: data.created_at || data.createdAt || new Date().toISOString(),
-        status: data.status || (data.payment_status === 'paid' || data.payment_status === 'success' ? 'Confirmed' : 'Pending'),
-        orderStatus: data.status || (data.payment_status === 'paid' || data.payment_status === 'success' ? 'Confirmed' : 'Pending'),
-        paymentStatus: data.payment_status || 'pending',
-        payment_status: data.payment_status || 'pending',
-        deliveryAddress: data.delivery_address || data.deliveryAddress || 'No Address Provided',
-        delivery_address: data.delivery_address || data.deliveryAddress || 'No Address Provided',
-        paymentMethod: data.payment_method || data.paymentMethod || 'Razorpay',
-        payment_method: data.payment_method || data.paymentMethod || 'Razorpay',
-        deliveryStatus: data.delivery_status || data.deliveryStatus || 'Pending',
-        delivery_status: data.delivery_status || data.deliveryStatus || 'Pending',
-        giftMessage: data.gift_message || data.giftMessage || '',
-        gift_message: data.gift_message || data.giftMessage || '',
+        recipientPhone: data.recipientPhone || data.recipient_phone || data.userPhone || '',
+        totalAmount: parseFloat(data.grandTotal || data.grand_total || data.totalAmount || 0),
+        grandTotal: parseFloat(data.grandTotal || data.grand_total || data.totalAmount || 0),
+        itemsSubtotal: parseFloat(data.itemsSubtotal || 0),
+        addonsSubtotal: parseFloat(data.addonsSubtotal || 0),
+        deliveryCharges: parseFloat(data.deliveryCharges || 0),
+        orderDate: data.createdAt || data.created_at || new Date().toISOString(),
+        createdAt: data.createdAt || data.created_at || new Date().toISOString(),
+        status: data.orderStatus || data.status || 'PLACED',
+        orderStatus: data.orderStatus || data.status || 'PLACED',
+        paymentStatus: data.paymentStatus || data.payment_status || 'PENDING_COD',
+        payment_status: data.paymentStatus || data.payment_status || 'PENDING_COD',
+        deliveryAddress: data.deliveryAddress || data.delivery_address || (data.deliveryDetails ? data.deliveryDetails.fullAddress : 'No Address Provided'),
+        delivery_address: data.deliveryAddress || data.delivery_address || (data.deliveryDetails ? data.deliveryDetails.fullAddress : 'No Address Provided'),
+        paymentMethod: data.paymentMethod || data.payment_method || 'COD',
+        payment_method: data.paymentMethod || data.payment_method || 'COD',
+        deliveryStatus: data.deliveryStatus || data.delivery_status || 'Pending',
+        delivery_status: data.deliveryStatus || data.delivery_status || 'Pending',
+        giftMessage: data.giftMessage || data.gift_message || '',
+        gift_message: data.giftMessage || data.gift_message || '',
         items: items.map(it => ({
-          productId: it.product_id || it.productId || '',
-          productImage: it.product_image || it.imageUrl || '',
-          productName: it.product_title || it.productName || '',
+          ...it,
+          productId: it.productId || it.product_id || '',
+          productImage: it.imageUrl || it.product_image || '',
+          productName: it.productTitle || it.product_title || '',
+          productTitle: it.productTitle || it.product_title || '',
           quantity: parseInt(it.quantity || 1, 10),
-          price: parseFloat(it.price || it.orderPrice || 0.0)
+          price: parseFloat(it.orderPrice || it.price || it.listingPrice || 0.0),
+          orderPrice: parseFloat(it.orderPrice || it.price || 0.0)
         }))
       };
     });
+
+    mapped.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 
     return res.status(200).json({
       success: true,
@@ -1140,6 +1155,10 @@ export const getCustomOrders = async (req, res) => {
       snapshot = await db.collection('custom_orders').get();
     }
 
+    if (snapshot.empty) {
+      snapshot = await db.collection('custom_orders').get();
+    }
+
     const mapped = snapshot.docs.map(doc => {
       const data = doc.data();
       return {
@@ -1231,6 +1250,10 @@ export const getRequestedOrders = async (req, res) => {
     try {
       snapshot = await db.collection('requested_orders').orderBy('createdAt', 'desc').get();
     } catch (e) {
+      snapshot = await db.collection('requested_orders').get();
+    }
+
+    if (snapshot.empty) {
       snapshot = await db.collection('requested_orders').get();
     }
 
