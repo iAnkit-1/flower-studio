@@ -29,7 +29,12 @@ export const createOrder = async (req, res) => {
     delivery_address,
     gift_message,
     items,
+    items_subtotal_listing,
+    itemsSubtotalListing,
     items_subtotal,
+    itemsSubtotal,
+    total_discount,
+    totalDiscount,
     addons_subtotal,
     delivery_total,
     grand_total,
@@ -47,36 +52,78 @@ export const createOrder = async (req, res) => {
   const orderId = `FS-${Date.now().toString().slice(-6)}-${randNum}`;
 
   try {
-    const formattedItems = items.map(item => ({
-      product_id: item.product_id || '',
-      product_title: item.product_title || '',
-      product_image: item.product_image || null,
-      quantity: parseInt(item.quantity || 1, 10),
-      price: parseFloat(item.price || 0.0),
-      delivery_date: item.delivery_date ? new Date(item.delivery_date).toISOString() : null,
-      delivery_slot: item.delivery_slot || null,
-      delivery_price: parseFloat(item.delivery_price || 0.0),
-      addons: item.addons || []
-    }));
+    let calcTotalDiscount = 0.0;
+    let calcItemsSubtotalListing = 0.0;
+
+    const formattedItems = items.map(item => {
+      const qty = parseInt(item.quantity || 1, 10);
+      const listingPrice = parseFloat(item.listingPrice || item.price || 0.0);
+      const orderPrice = parseFloat(item.orderPrice || item.price || 0.0);
+      const itemDiscount = (item.itemDiscount !== undefined && item.itemDiscount !== null)
+        ? parseFloat(item.itemDiscount)
+        : Math.max(0.0, (listingPrice - orderPrice) * qty);
+
+      calcTotalDiscount += itemDiscount;
+      calcItemsSubtotalListing += (listingPrice * qty);
+
+      return {
+        productId: item.productId || item.product_id || '',
+        productTitle: item.productTitle || item.product_title || '',
+        product_id: item.productId || item.product_id || '',
+        product_title: item.productTitle || item.product_title || '',
+        category: item.category || '',
+        quantity: qty,
+        listingPrice: listingPrice,
+        orderPrice: orderPrice,
+        price: orderPrice,
+        itemDiscount: itemDiscount,
+        imageUrl: item.imageUrl || item.product_image || null,
+        product_image: item.imageUrl || item.product_image || null,
+        deliveryDate: item.deliveryDate || (item.delivery_date ? new Date(item.delivery_date).toISOString() : null),
+        deliverySlot: item.deliverySlot || item.delivery_slot || null,
+        delivery_date: item.delivery_date ? new Date(item.delivery_date).toISOString() : null,
+        delivery_slot: item.delivery_slot || null,
+        delivery_price: parseFloat(item.delivery_price || 0.0),
+        addons: item.addons || []
+      };
+    });
+
+    const finalItemsSubtotalListing = parseFloat(itemsSubtotalListing || items_subtotal_listing || calcItemsSubtotalListing);
+    const finalTotalDiscount = parseFloat(totalDiscount || total_discount || calcTotalDiscount);
 
     const orderDocument = {
       id: orderId,
+      orderId: orderId,
+      recipientName: recipient_name,
+      recipientPhone: recipient_phone,
       recipient_name,
       recipient_phone,
+      deliveryAddress: delivery_address,
       delivery_address,
+      giftMessage: gift_message || null,
       gift_message: gift_message || null,
-      items_subtotal: parseFloat(items_subtotal || 0.0),
+      itemsSubtotalListing: finalItemsSubtotalListing,
+      items_subtotal_listing: finalItemsSubtotalListing,
+      totalDiscount: finalTotalDiscount,
+      total_discount: finalTotalDiscount,
       addons_subtotal: parseFloat(addons_subtotal || 0.0),
       delivery_total: parseFloat(delivery_total || 0.0),
+      deliveryCharges: parseFloat(delivery_total || 0.0),
       grand_total: parseFloat(grand_total || 0.0),
+      grandTotal: parseFloat(grand_total || 0.0),
       payment_method,
+      paymentMethod: payment_method,
       payment_status: 'pending',
+      paymentStatus: 'PENDING_COD',
+      orderStatus: 'PLACED',
+      status: 'PLACED',
       razorpay_order_id: null,
       razorpay_payment_id: null,
       razorpay_signature: null,
       delivery_status: 'pending',
       items: formattedItems,
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      createdAt: new Date().toISOString()
     };
 
     // Save order in Firestore
