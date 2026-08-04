@@ -11,16 +11,23 @@ if (!JWT_SECRET) {
  * Attaches req.staff = { email, role, name } on success.
  */
 export const verifyJWT = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
+  // 1. Check HttpOnly cookie first for maximum security
+  let token = req.cookies?.org_jwt;
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({
-      success: false,
-      message: 'Authorization token is missing. Please log in.'
-    });
+  // 2. Fallback to Authorization: Bearer <token> header
+  if (!token) {
+    const authHeader = req.headers['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.split(' ')[1];
+    }
   }
 
-  const token = authHeader.split(' ')[1];
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      message: 'Authorization token or cookie is missing. Please log in.'
+    });
+  }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);

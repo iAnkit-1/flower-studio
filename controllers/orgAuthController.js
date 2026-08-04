@@ -62,7 +62,17 @@ export const orgLogin = async (req, res) => {
 
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 
-    // 4. Update last login timestamp
+    // 4. Set HttpOnly Secure Cookie for maximum security
+    const isProd = process.env.NODE_ENV === 'production' || process.env.VERCEL;
+    res.cookie('org_jwt', token, {
+      httpOnly: true,
+      secure:   isProd,
+      sameSite: isProd ? 'none' : 'lax',
+      maxAge:   7 * 24 * 60 * 60 * 1000, // 7 days
+      path:     '/',
+    });
+
+    // 5. Update last login timestamp
     await staffDoc.ref.update({ lastLoginAt: new Date().toISOString() });
 
     return res.status(200).json({
@@ -84,6 +94,25 @@ export const orgLogin = async (req, res) => {
       error: error.message
     });
   }
+};
+
+/**
+ * POST /api/org/auth/logout
+ * Clears the HttpOnly JWT cookie.
+ */
+export const orgLogout = async (req, res) => {
+  const isProd = process.env.NODE_ENV === 'production' || process.env.VERCEL;
+  res.clearCookie('org_jwt', {
+    httpOnly: true,
+    secure:   isProd,
+    sameSite: isProd ? 'none' : 'lax',
+    path:     '/',
+  });
+
+  return res.status(200).json({
+    success: true,
+    message: 'Logged out successfully.'
+  });
 };
 
 /**
@@ -134,10 +163,10 @@ export const getStaffMe = async (req, res) => {
  * Lightweight endpoint for the Flutter app to validate a stored JWT on startup.
  */
 export const verifyOrgToken = async (req, res) => {
-  const { token } = req.body;
+  const token = req.cookies?.org_jwt || req.body?.token;
 
   if (!token) {
-    return res.status(400).json({ success: false, message: 'Token is required.' });
+    return res.status(400).json({ success: false, message: 'Token or cookie is required.' });
   }
 
   try {

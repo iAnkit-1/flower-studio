@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 
 import productRoutes  from './routes/productRoutes.js';
@@ -13,11 +14,14 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// CORS configuration for Flutter Web, APK, and browser cross-origin requests
+// CORS configuration supporting HttpOnly Cookies & Bearer Tokens across Web & APK
 const corsOptions = {
-  origin: '*',
+  origin: (origin, callback) => {
+    // Allow any origin or requests without origin (e.g. native mobile app, Postman)
+    callback(null, true);
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Cookie'],
   credentials: true,
   optionsSuccessStatus: 200,
 };
@@ -25,17 +29,20 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
-// Preflight handler: return 200 OK immediately with CORS headers for all OPTIONS requests
+// Preflight handler: return 200 OK immediately with dynamic origin CORS headers for cookie credentials
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+  const origin = req.headers.origin || '*';
+  res.header('Access-Control-Allow-Origin', origin);
+  res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Cookie');
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
   next();
 });
 
+app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 

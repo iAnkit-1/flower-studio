@@ -1,5 +1,5 @@
 import express from 'express';
-import { orgLogin, getStaffMe, verifyOrgToken } from '../controllers/orgAuthController.js';
+import { orgLogin, orgLogout, getStaffMe, verifyOrgToken } from '../controllers/orgAuthController.js';
 import { verifyJWT } from '../middleware/verifyJWT.js';
 
 const router = express.Router();
@@ -7,6 +7,8 @@ const router = express.Router();
 // Public — no JWT needed
 router.post('/login',             orgLogin);
 router.post('/auth/login',        orgLogin);
+router.post('/logout',            orgLogout);
+router.post('/auth/logout',       orgLogout);
 router.post('/verify-token',      verifyOrgToken);
 router.post('/auth/verify-token', verifyOrgToken);
 
