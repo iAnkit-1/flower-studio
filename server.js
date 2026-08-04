@@ -3,11 +3,13 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 
-import productRoutes  from './routes/productRoutes.js';
-import authRoutes     from './routes/authRoutes.js';
-import orderRoutes    from './routes/orderRoutes.js';
-import supportRoutes  from './routes/supportRoutes.js';
-import orgAuthRoutes  from './routes/orgAuthRoutes.js';
+import productRoutes           from './routes/productRoutes.js';
+import authRoutes              from './routes/authRoutes.js';
+import orderRoutes             from './routes/orderRoutes.js';
+import supportRoutes           from './routes/supportRoutes.js';
+import orgAuthRoutes           from './routes/orgAuthRoutes.js';
+import deliveryChargesRoutes   from './routes/deliveryChargesRoutes.js';
+import { seedDeliveryCharges } from './controllers/deliveryChargesController.js';
 
 dotenv.config();
 
@@ -47,14 +49,18 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 // Customer routes (Firebase Auth)
-app.use('/api/products', productRoutes);
-app.use('/api/auth',     authRoutes);
-app.use('/api/orders',   orderRoutes);
-app.use('/api/support',  supportRoutes);
+app.use('/api/products',          productRoutes);
+app.use('/api/auth',              authRoutes);
+app.use('/api/orders',            orderRoutes);
+app.use('/api/support',           supportRoutes);
+app.use('/api/delivery-charges',  deliveryChargesRoutes);
 
 // Organization routes (Custom JWT)
 app.use('/api/org/auth', orgAuthRoutes);
 app.use('/api/org',      orgAuthRoutes);
+
+// Seed Firestore collections with defaults on startup
+seedDeliveryCharges();
 
 // Health check endpoint
 app.get('/health', (req, res) => {
