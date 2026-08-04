@@ -14,30 +14,7 @@
  */
 
 import bcrypt from 'bcryptjs';
-import admin from 'firebase-admin';
-import dotenv from 'dotenv';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
-
-// ── Initialize Firebase Admin ─────────────────────────────────────────────────
-const keyFilePath = path.join(__dirname, '../config/serviceAccountKey.json');
-
-if (admin.apps.length === 0) {
-  if (fs.existsSync(keyFilePath)) {
-    const serviceAccount = JSON.parse(fs.readFileSync(keyFilePath, 'utf8'));
-    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-  } else {
-    throw new Error('serviceAccountKey.json not found. Cannot seed staff.');
-  }
-}
-
-const db = admin.firestore();
+import db from '../config/db.js';
 
 // ── Staff definitions ─────────────────────────────────────────────────────────
 // ⚠️  Change passwords before running in production!
