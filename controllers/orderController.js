@@ -53,77 +53,103 @@ export const createOrder = async (req, res) => {
 
   try {
     let calcTotalDiscount = 0.0;
-    let calcItemsSubtotalListing = 0.0;
+    let calcItemsSubtotal = 0.0;
+
+    const firstItem = items && items.length > 0 ? items[0] : {};
+    const globalDeliveryDate = req.body.deliveryDate || req.body.delivery_date || firstItem.deliveryDate || firstItem.delivery_date || new Date().toISOString();
+    const globalDeliverySlot = req.body.deliverySlot || req.body.delivery_slot || firstItem.deliverySlot || firstItem.delivery_slot || 'Standard Delivery';
 
     const formattedItems = items.map(item => {
       const qty = parseInt(item.quantity || 1, 10);
-      const listingPrice = parseFloat(item.listingPrice || item.price || 0.0);
-      const orderPrice = parseFloat(item.orderPrice || item.price || 0.0);
-      const itemDiscount = (item.itemDiscount !== undefined && item.itemDiscount !== null)
-        ? parseFloat(item.itemDiscount)
-        : Math.max(0.0, (listingPrice - orderPrice) * qty);
+      const unitListingPrice = parseFloat(item.listingPrice || item.price || 0.0);
+      const unitOrderPrice = parseFloat(item.orderPrice || item.price || 0.0);
+      const unitDiscount = Math.max(0.0, unitListingPrice - unitOrderPrice);
 
-      calcTotalDiscount += itemDiscount;
-      calcItemsSubtotalListing += (listingPrice * qty);
+      const itemListingPrice = parseFloat(item.itemListingPrice || (unitListingPrice * qty));
+      const itemOrderPrice = parseFloat(item.itemOrderPrice || (unitOrderPrice * qty));
+      const itemTotalDiscount = parseFloat(item.itemTotalDiscount || item.itemDiscount || (unitDiscount * qty));
+
+      calcTotalDiscount += itemTotalDiscount;
+      calcItemsSubtotal += itemListingPrice;
 
       return {
         productId: item.productId || item.product_id || '',
         productTitle: item.productTitle || item.product_title || '',
-        product_id: item.productId || item.product_id || '',
-        product_title: item.productTitle || item.product_title || '',
-        category: item.category || '',
+        category: item.category || 'flower',
         quantity: qty,
-        listingPrice: listingPrice,
-        orderPrice: orderPrice,
-        price: orderPrice,
-        itemDiscount: itemDiscount,
+        listingPrice: unitListingPrice,
+        orderPrice: unitOrderPrice,
+        discount: unitDiscount,
+        itemListingPrice: itemListingPrice,
+        itemOrderPrice: itemOrderPrice,
+        itemTotalDiscount: itemTotalDiscount,
         imageUrl: item.imageUrl || item.product_image || null,
-        product_image: item.imageUrl || item.product_image || null,
-        deliveryDate: item.deliveryDate || (item.delivery_date ? new Date(item.delivery_date).toISOString() : null),
-        deliverySlot: item.deliverySlot || item.delivery_slot || null,
-        delivery_date: item.delivery_date ? new Date(item.delivery_date).toISOString() : null,
-        delivery_slot: item.delivery_slot || null,
-        delivery_price: parseFloat(item.delivery_price || 0.0),
+        cakeMessage: item.cakeMessage || null,
         addons: item.addons || []
       };
     });
 
-    const finalItemsSubtotalListing = parseFloat(itemsSubtotalListing || items_subtotal_listing || calcItemsSubtotalListing);
+    const finalItemsSubtotal = parseFloat(itemsSubtotal || items_subtotal || itemsSubtotalListing || calcItemsSubtotal);
     const finalTotalDiscount = parseFloat(totalDiscount || total_discount || calcTotalDiscount);
+
+    const deliveryDetailsObj = req.body.deliveryDetails && typeof req.body.deliveryDetails === 'object'
+      ? {
+          fullAddress: req.body.deliveryDetails.fullAddress || delivery_address,
+          latitude: parseFloat(req.body.deliveryDetails.latitude || req.body.latitude || 25.9207997),
+          longitude: parseFloat(req.body.deliveryDetails.longitude || req.body.longitude || 82.2026451),
+          recipientName: req.body.deliveryDetails.recipientName || recipient_name,
+          recipientPhone: req.body.deliveryDetails.recipientPhone || recipient_phone,
+          deliveryDate: req.body.deliveryDetails.deliveryDate || globalDeliveryDate,
+          deliverySlot: req.body.deliveryDetails.deliverySlot || globalDeliverySlot,
+        }
+      : {
+          fullAddress: delivery_address,
+          latitude: parseFloat(req.body.latitude || 25.9207997),
+          longitude: parseFloat(req.body.longitude || 82.2026451),
+          recipientName: recipient_name,
+          recipientPhone: recipient_phone,
+          deliveryDate: globalDeliveryDate,
+          deliverySlot: globalDeliverySlot,
+        };
 
     const orderDocument = {
       id: orderId,
       orderId: orderId,
+      userId: req.body.userId || req.body.user_id || `GUEST_${Date.now()}`,
+      userPhone: req.body.userPhone || req.body.user_phone || recipient_phone,
       recipientName: recipient_name,
       recipientPhone: recipient_phone,
       recipient_name,
       recipient_phone,
       deliveryAddress: delivery_address,
       delivery_address,
+      deliveryDetails: deliveryDetailsObj,
       giftMessage: gift_message || null,
       gift_message: gift_message || null,
-      itemsSubtotalListing: finalItemsSubtotalListing,
-      items_subtotal_listing: finalItemsSubtotalListing,
+      itemsSubtotal: finalItemsSubtotal,
+      items_subtotal: finalItemsSubtotal,
       totalDiscount: finalTotalDiscount,
       total_discount: finalTotalDiscount,
+      addonsSubtotal: parseFloat(addons_subtotal || 0.0),
       addons_subtotal: parseFloat(addons_subtotal || 0.0),
-      delivery_total: parseFloat(delivery_total || 0.0),
       deliveryCharges: parseFloat(delivery_total || 0.0),
-      grand_total: parseFloat(grand_total || 0.0),
+      delivery_total: parseFloat(delivery_total || 0.0),
       grandTotal: parseFloat(grand_total || 0.0),
-      payment_method,
-      paymentMethod: payment_method,
-      payment_status: 'pending',
+      grand_total: parseFloat(grand_total || 0.0),
+      paymentMethod: payment_method || 'COD',
+      payment_method: payment_method || 'COD',
       paymentStatus: 'PENDING_COD',
+      payment_status: 'pending',
       orderStatus: 'PLACED',
       status: 'PLACED',
+      razorpayPaymentId: '',
       razorpay_order_id: null,
       razorpay_payment_id: null,
       razorpay_signature: null,
       delivery_status: 'pending',
       items: formattedItems,
-      created_at: new Date().toISOString(),
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      created_at: new Date().toISOString()
     };
 
     // Save order in Firestore
@@ -1036,6 +1062,49 @@ export const getAllOrders = async (req, res) => {
       const recipientPhone = delDetails.recipientPhone || data.recipientPhone || data.recipient_phone || data.userPhone || '';
       const fullAddress = delDetails.fullAddress || data.deliveryAddress || data.delivery_address || 'No Address Provided';
 
+      // Derive itemsSubtotal and totalDiscount from items array
+      let calcItemsSubtotal = 0.0;
+      let calcTotalDiscount = 0.0;
+      const mappedItems = items.map(it => {
+        const img = it.productImage || it.imageUrl || it.product_image || '';
+        const qty = parseInt(it.quantity || 1, 10);
+        const unitListingPrice = parseFloat(it.listingPrice || 0);
+        const unitOrderPrice = parseFloat(it.orderPrice || it.price || 0);
+        // Support new names first, fall back to old names
+        const itemListingPrice = parseFloat(it.itemListingPrice || it.itemSubtotalListingPrice || (unitListingPrice * qty));
+        const itemOrderPrice = parseFloat(it.itemOrderPrice || it.itemSubtotalOrderPrice || (unitOrderPrice * qty));
+        const itemTotalDiscount = parseFloat(it.itemTotalDiscount || it.discount || 0);
+
+        calcItemsSubtotal += itemListingPrice;
+        calcTotalDiscount += itemTotalDiscount;
+
+        return {
+          productId: it.productId || it.product_id || '',
+          productTitle: it.productTitle || it.productName || it.product_title || '',
+          productName: it.productTitle || it.productName || it.product_title || '',
+          productImage: img,
+          category: it.category || '',
+          quantity: qty,
+          listingPrice: unitListingPrice,
+          orderPrice: unitOrderPrice,
+          price: unitOrderPrice,
+          discount: parseFloat(it.discount || 0),
+          itemListingPrice: itemListingPrice,
+          itemOrderPrice: itemOrderPrice,
+          itemTotalDiscount: itemTotalDiscount,
+          cakeMessage: it.cakeMessage || null,
+          addons: it.addons || []
+        };
+      });
+
+      // Prefer stored values, fall back to computed
+      const finalItemsSubtotal = parseFloat(data.itemsSubtotal || calcItemsSubtotal);
+      const finalTotalDiscount = parseFloat(data.totalDiscount || calcTotalDiscount);
+
+      // Delivery date & slot — now stored in deliveryDetails
+      const deliveryDate = delDetails.deliveryDate || data.deliveryDate || '';
+      const deliverySlot = delDetails.deliverySlot || data.deliverySlot || '';
+
       return {
         orderId: data.orderId || data.id || doc.id,
         id: data.orderId || data.id || doc.id,
@@ -1047,7 +1116,8 @@ export const getAllOrders = async (req, res) => {
         paymentMethod: data.paymentMethod || data.payment_method || 'COD',
         razorpayPaymentId: data.razorpayPaymentId || '',
         giftMessage: data.giftMessage || data.gift_message || '',
-        itemsSubtotal: parseFloat(data.itemsSubtotal || 0),
+        itemsSubtotal: finalItemsSubtotal,
+        totalDiscount: finalTotalDiscount,
         deliveryCharges: parseFloat(data.deliveryCharges || 0),
         grandTotal: parseFloat(data.grandTotal || data.grand_total || data.totalAmount || 0),
         customerEmail: data.customerEmail || (recipientName !== 'Customer' ? recipientName.toLowerCase().replace(/\s+/g, '') + '@example.com' : 'customer@example.com'),
@@ -1056,29 +1126,11 @@ export const getAllOrders = async (req, res) => {
           recipientPhone: recipientPhone,
           fullAddress: fullAddress,
           latitude: delDetails.latitude || null,
-          longitude: delDetails.longitude || null
+          longitude: delDetails.longitude || null,
+          deliveryDate: deliveryDate,
+          deliverySlot: deliverySlot,
         },
-        items: items.map(it => {
-          const img = it.productImage || it.imageUrl || it.product_image || '';
-          return {
-            productId: it.productId || it.product_id || '',
-            productTitle: it.productTitle || it.productName || it.product_title || '',
-            productName: it.productTitle || it.productName || it.product_title || '',
-            productImage: img,
-            category: it.category || '',
-            quantity: parseInt(it.quantity || 1, 10),
-            listingPrice: parseFloat(it.listingPrice || 0),
-            orderPrice: parseFloat(it.orderPrice || it.price || 0),
-            price: parseFloat(it.orderPrice || it.price || 0),
-            discount: parseFloat(it.discount || 0),
-            itemSubtotalListingPrice: parseFloat(it.itemSubtotalListingPrice || it.listingPrice || 0),
-            itemSubtotalOrderPrice: parseFloat(it.itemSubtotalOrderPrice || it.orderPrice || it.price || 0),
-            itemTotalDiscount: parseFloat(it.itemTotalDiscount || it.discount || 0),
-            deliveryDate: it.deliveryDate || '',
-            deliverySlot: it.deliverySlot || '',
-            cakeMessage: it.cakeMessage || null
-          };
-        })
+        items: mappedItems
       };
     });
 
@@ -1140,7 +1192,7 @@ export const updateOrderStatus = async (req, res) => {
 // Manually update payment status
 export const updateOrderPaymentStatus = async (req, res) => {
   const { orderId } = req.params;
-  const { paymentStatus } = req.body;
+  const { paymentStatus, paymentMethod } = req.body;
 
   if (!paymentStatus) {
     return res.status(400).json({ success: false, message: 'Payment status parameter is required.' });
@@ -1153,7 +1205,12 @@ export const updateOrderPaymentStatus = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Order not found.' });
     }
 
-    await docRef.update({ paymentStatus });
+    const updatePayload = { paymentStatus };
+    if (paymentMethod) {
+      updatePayload.paymentMethod = paymentMethod;
+    }
+
+    await docRef.update(updatePayload);
     const updatedSnap = await docRef.get();
 
     return res.status(200).json({
