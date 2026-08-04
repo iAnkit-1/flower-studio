@@ -979,23 +979,36 @@ export const getAllOrders = async (req, res) => {
     const mapped = snapshot.docs.map(doc => {
       const data = doc.data();
       const items = data.items || [];
-      const recipientName = data.recipient_name || 'Customer';
+      const recipientName = data.recipient_name || data.customerName || 'Customer';
 
       return {
         id: data.id || doc.id,
+        orderId: data.id || doc.id,
         customerName: recipientName,
-        customerEmail: recipientName.toLowerCase().replace(/\s+/g, '') + '@example.com',
-        totalAmount: parseFloat(data.grand_total || 0),
-        orderDate: data.created_at || new Date().toISOString(),
-        status: data.payment_status === 'paid' || data.payment_status === 'success' ? 'Confirmed' : 'Pending',
-        paymentStatus: data.payment_status === 'paid' ? 'Paid' : data.payment_status === 'refunded' ? 'Refunded' : 'Unpaid',
-        deliveryAddress: data.delivery_address || '',
+        customerEmail: data.customerEmail || (recipientName !== 'Customer' ? recipientName.toLowerCase().replace(/\s+/g, '') + '@example.com' : 'customer@example.com'),
+        recipientPhone: data.recipient_phone || data.userPhone || '',
+        totalAmount: parseFloat(data.grand_total || data.totalAmount || 0),
+        grandTotal: parseFloat(data.grand_total || data.totalAmount || 0),
+        orderDate: data.created_at || data.createdAt || new Date().toISOString(),
+        createdAt: data.created_at || data.createdAt || new Date().toISOString(),
+        status: data.status || (data.payment_status === 'paid' || data.payment_status === 'success' ? 'Confirmed' : 'Pending'),
+        orderStatus: data.status || (data.payment_status === 'paid' || data.payment_status === 'success' ? 'Confirmed' : 'Pending'),
+        paymentStatus: data.payment_status || 'pending',
+        payment_status: data.payment_status || 'pending',
+        deliveryAddress: data.delivery_address || data.deliveryAddress || 'No Address Provided',
+        delivery_address: data.delivery_address || data.deliveryAddress || 'No Address Provided',
+        paymentMethod: data.payment_method || data.paymentMethod || 'Razorpay',
+        payment_method: data.payment_method || data.paymentMethod || 'Razorpay',
+        deliveryStatus: data.delivery_status || data.deliveryStatus || 'Pending',
+        delivery_status: data.delivery_status || data.deliveryStatus || 'Pending',
+        giftMessage: data.gift_message || data.giftMessage || '',
+        gift_message: data.gift_message || data.giftMessage || '',
         items: items.map(it => ({
-          productId: it.product_id || '',
-          productImage: it.product_image || '',
-          productName: it.product_title || '',
+          productId: it.product_id || it.productId || '',
+          productImage: it.product_image || it.imageUrl || '',
+          productName: it.product_title || it.productName || '',
           quantity: parseInt(it.quantity || 1, 10),
-          price: parseFloat(it.price || 0.0)
+          price: parseFloat(it.price || it.orderPrice || 0.0)
         }))
       };
     });
