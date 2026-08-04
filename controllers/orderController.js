@@ -983,46 +983,55 @@ export const getAllOrders = async (req, res) => {
     const mapped = snapshot.docs.map(doc => {
       const data = doc.data();
       const items = data.items || [];
-      const recipientName = data.recipientName || data.recipient_name || data.customerName || 'Customer';
+      const delDetails = data.deliveryDetails || {};
+
+      const recipientName = delDetails.recipientName || data.recipientName || data.recipient_name || data.customerName || 'Customer';
+      const recipientPhone = delDetails.recipientPhone || data.recipientPhone || data.recipient_phone || data.userPhone || '';
+      const fullAddress = delDetails.fullAddress || data.deliveryAddress || data.delivery_address || 'No Address Provided';
 
       return {
-        ...data, // Include all original raw fields from Firestore
-        id: data.orderId || data.id || doc.id,
         orderId: data.orderId || data.id || doc.id,
+        id: data.orderId || data.id || doc.id,
         userId: data.userId || '',
         userPhone: data.userPhone || '',
-        customerName: recipientName,
-        customerEmail: data.customerEmail || (recipientName !== 'Customer' ? recipientName.toLowerCase().replace(/\s+/g, '') + '@example.com' : 'customer@example.com'),
-        recipientPhone: data.recipientPhone || data.recipient_phone || data.userPhone || '',
-        totalAmount: parseFloat(data.grandTotal || data.grand_total || data.totalAmount || 0),
-        grandTotal: parseFloat(data.grandTotal || data.grand_total || data.totalAmount || 0),
-        itemsSubtotal: parseFloat(data.itemsSubtotal || 0),
-        addonsSubtotal: parseFloat(data.addonsSubtotal || 0),
-        deliveryCharges: parseFloat(data.deliveryCharges || 0),
-        orderDate: data.createdAt || data.created_at || new Date().toISOString(),
         createdAt: data.createdAt || data.created_at || new Date().toISOString(),
-        status: data.orderStatus || data.status || 'PLACED',
-        orderStatus: data.orderStatus || data.status || 'PLACED',
+        orderStatus: data.orderStatus || data.status || data.deliveryStatus || data.delivery_status || 'PLACED',
         paymentStatus: data.paymentStatus || data.payment_status || 'PENDING_COD',
-        payment_status: data.paymentStatus || data.payment_status || 'PENDING_COD',
-        deliveryAddress: data.deliveryAddress || data.delivery_address || (data.deliveryDetails ? data.deliveryDetails.fullAddress : 'No Address Provided'),
-        delivery_address: data.deliveryAddress || data.delivery_address || (data.deliveryDetails ? data.deliveryDetails.fullAddress : 'No Address Provided'),
         paymentMethod: data.paymentMethod || data.payment_method || 'COD',
-        payment_method: data.paymentMethod || data.payment_method || 'COD',
-        deliveryStatus: data.deliveryStatus || data.delivery_status || 'Pending',
-        delivery_status: data.deliveryStatus || data.delivery_status || 'Pending',
+        razorpayPaymentId: data.razorpayPaymentId || '',
         giftMessage: data.giftMessage || data.gift_message || '',
-        gift_message: data.giftMessage || data.gift_message || '',
-        items: items.map(it => ({
-          ...it,
-          productId: it.productId || it.product_id || '',
-          productImage: it.imageUrl || it.product_image || '',
-          productName: it.productTitle || it.product_title || '',
-          productTitle: it.productTitle || it.product_title || '',
-          quantity: parseInt(it.quantity || 1, 10),
-          price: parseFloat(it.orderPrice || it.price || it.listingPrice || 0.0),
-          orderPrice: parseFloat(it.orderPrice || it.price || 0.0)
-        }))
+        itemsSubtotal: parseFloat(data.itemsSubtotal || 0),
+        deliveryCharges: parseFloat(data.deliveryCharges || 0),
+        grandTotal: parseFloat(data.grandTotal || data.grand_total || data.totalAmount || 0),
+        customerEmail: data.customerEmail || (recipientName !== 'Customer' ? recipientName.toLowerCase().replace(/\s+/g, '') + '@example.com' : 'customer@example.com'),
+        deliveryDetails: {
+          recipientName: recipientName,
+          recipientPhone: recipientPhone,
+          fullAddress: fullAddress,
+          latitude: delDetails.latitude || null,
+          longitude: delDetails.longitude || null
+        },
+        items: items.map(it => {
+          const img = it.productImage || it.imageUrl || it.product_image || '';
+          return {
+            productId: it.productId || it.product_id || '',
+            productTitle: it.productTitle || it.productName || it.product_title || '',
+            productName: it.productTitle || it.productName || it.product_title || '',
+            productImage: img,
+            category: it.category || '',
+            quantity: parseInt(it.quantity || 1, 10),
+            listingPrice: parseFloat(it.listingPrice || 0),
+            orderPrice: parseFloat(it.orderPrice || it.price || 0),
+            price: parseFloat(it.orderPrice || it.price || 0),
+            discount: parseFloat(it.discount || 0),
+            itemSubtotalListingPrice: parseFloat(it.itemSubtotalListingPrice || it.listingPrice || 0),
+            itemSubtotalOrderPrice: parseFloat(it.itemSubtotalOrderPrice || it.orderPrice || it.price || 0),
+            itemTotalDiscount: parseFloat(it.itemTotalDiscount || it.discount || 0),
+            deliveryDate: it.deliveryDate || '',
+            deliverySlot: it.deliverySlot || '',
+            cakeMessage: it.cakeMessage || null
+          };
+        })
       };
     });
 
@@ -1042,22 +1051,22 @@ export const getAllOrders = async (req, res) => {
   }
 };
 
-// Manually update order status (Confirmed or Cancelled)
+// Manually update order status (Confirmed, Cancelled, Delivered, etc.)
 export const updateOrderStatus = async (req, res) => {
   const { orderId } = req.params;
-  const { status } = req.body;
+  const { status, orderStatus } = req.body;
+  const targetStatus = orderStatus || status;
 
-  if (!status) {
+  if (!targetStatus) {
     return res.status(400).json({ success: false, message: 'Status parameter is required.' });
   }
 
-  const deliveryStatus = status === 'Confirmed' ? 'order confirmed' : 'cancelled';
-  const updateData = { delivery_status: deliveryStatus };
+  const updateData = { orderStatus: targetStatus };
 
-  if (status === 'Cancelled') {
-    updateData.payment_status = 'refunded';
-  } else if (status === 'Confirmed') {
-    updateData.payment_status = 'paid';
+  if (targetStatus === 'Cancelled' || targetStatus === 'CANCELLED') {
+    updateData.paymentStatus = 'REFUNDED';
+  } else if (targetStatus === 'Confirmed' || targetStatus === 'CONFIRMED') {
+    updateData.paymentStatus = 'PAID';
   }
 
   try {
@@ -1072,7 +1081,7 @@ export const updateOrderStatus = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: `Order status updated to ${status}.`,
+      message: `Order status updated to ${targetStatus}.`,
       order: updatedSnap.data()
     });
   } catch (err) {
@@ -1081,7 +1090,7 @@ export const updateOrderStatus = async (req, res) => {
   }
 };
 
-// Manually update payment status (pending, success, cash)
+// Manually update payment status
 export const updateOrderPaymentStatus = async (req, res) => {
   const { orderId } = req.params;
   const { paymentStatus } = req.body;
@@ -1090,8 +1099,6 @@ export const updateOrderPaymentStatus = async (req, res) => {
     return res.status(400).json({ success: false, message: 'Payment status parameter is required.' });
   }
 
-  const dbStatus = paymentStatus === 'success' ? 'paid' : paymentStatus.toLowerCase();
-
   try {
     const docRef = db.collection('orders').doc(orderId);
     const docSnap = await docRef.get();
@@ -1099,7 +1106,7 @@ export const updateOrderPaymentStatus = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Order not found.' });
     }
 
-    await docRef.update({ payment_status: dbStatus });
+    await docRef.update({ paymentStatus });
     const updatedSnap = await docRef.get();
 
     return res.status(200).json({
@@ -1113,13 +1120,14 @@ export const updateOrderPaymentStatus = async (req, res) => {
   }
 };
 
-// Update delivery status
+// Update delivery/order status
 export const updateOrderDeliveryStatus = async (req, res) => {
   const { orderId } = req.params;
-  const { deliveryStatus } = req.body;
+  const { deliveryStatus, orderStatus } = req.body;
+  const newStatus = orderStatus || deliveryStatus;
 
-  if (!deliveryStatus) {
-    return res.status(400).json({ success: false, message: 'Delivery status parameter is required.' });
+  if (!newStatus) {
+    return res.status(400).json({ success: false, message: 'Order status parameter is required.' });
   }
 
   try {
@@ -1129,12 +1137,12 @@ export const updateOrderDeliveryStatus = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Order not found.' });
     }
 
-    await docRef.update({ delivery_status: deliveryStatus });
+    await docRef.update({ orderStatus: newStatus });
     const updatedSnap = await docRef.get();
 
     return res.status(200).json({
       success: true,
-      message: `Delivery status updated to ${deliveryStatus}.`,
+      message: `Order status updated to ${newStatus}.`,
       order: updatedSnap.data()
     });
   } catch (err) {
