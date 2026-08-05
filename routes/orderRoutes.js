@@ -2,6 +2,7 @@ import express from 'express';
 import {
   createOrder,
   verifyPayment,
+  handleWebhook,
   getOrdersByIds,
   getInvoice,
   getOrderStatus,
@@ -21,10 +22,12 @@ import {
 
 const router = express.Router();
 
-// --- Regular Standard Orders ---
+// --- Regular Standard Orders & Payments ---
 router.post('/', createOrder);
+router.post('/create-order', createOrder);
 router.get('/', getAllOrders); // Fetch all standard orders
 router.post('/verify', verifyPayment);
+router.post('/webhook', handleWebhook);
 router.post('/by-ids', getOrdersByIds);
 router.get('/:orderId/invoice', getInvoice);
 router.get('/:orderId/status', getOrderStatus);

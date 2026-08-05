@@ -15,12 +15,12 @@ if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
     console.error('Failed to initialize Razorpay SDK:', err);
   }
 } else {
-  console.log('Razorpay keys not configured. Falling back to sandbox/simulation.');
+  console.warn('Razorpay keys not configured. Operating in simulation mode.');
 }
 
 /**
- * Create Order
- * POST /api/orders
+ * Create Order (Server-Side Price Validation & Razorpay Order Creation)
+ * POST /api/orders or POST /api/payments/create-order
  */
 export const createOrder = async (req, res) => {
   const {
@@ -41,10 +41,8 @@ export const createOrder = async (req, res) => {
     payment_method,
   } = req.body;
 
-  const grandTotal = grand_total;
-
-  if (!recipient_name || !recipient_phone || !delivery_address || !items || items.length === 0) {
-    return res.status(400).json({ success: false, message: 'Required fields are missing.' });
+  if (!recipient_name || !recipient_phone || !delivery_address || !items || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ success: false, message: 'Required order details (recipient_name, phone, address, items) are missing.' });
   }
 
   // Generate unique order ID
@@ -52,45 +50,71 @@ export const createOrder = async (req, res) => {
   const orderId = `FS-${Date.now().toString().slice(-6)}-${randNum}`;
 
   try {
-    let calcTotalDiscount = 0.0;
-    let calcItemsSubtotal = 0.0;
+    let validatedSubtotal = 0.0;
+    let validatedListingSubtotal = 0.0;
+    let validatedDiscount = 0.0;
+    const validatedItems = [];
 
-    const firstItem = items && items.length > 0 ? items[0] : {};
-    const globalDeliveryDate = req.body.deliveryDate || req.body.delivery_date || firstItem.deliveryDate || firstItem.delivery_date || new Date().toISOString();
-    const globalDeliverySlot = req.body.deliverySlot || req.body.delivery_slot || firstItem.deliverySlot || firstItem.delivery_slot || 'Standard Delivery';
-
-    const formattedItems = items.map(item => {
+    // Server-Side Price Calculation & Validation against Firestore
+    for (const item of items) {
+      const productId = item.productId || item.product_id;
       const qty = parseInt(item.quantity || 1, 10);
-      const unitListingPrice = parseFloat(item.listingPrice || item.price || 0.0);
-      const unitOrderPrice = parseFloat(item.orderPrice || item.price || 0.0);
+      if (qty <= 0) continue;
+
+      let unitListingPrice = parseFloat(item.listingPrice || item.price || 0.0);
+      let unitOrderPrice = parseFloat(item.orderPrice || item.price || 0.0);
+      let productTitle = item.productTitle || item.product_title || 'Flower Studio Product';
+
+      if (productId && db) {
+        try {
+          const productSnap = await db.collection('products').doc(productId).get();
+          if (productSnap.exists) {
+            const prodData = productSnap.data();
+            productTitle = prodData.title || productTitle;
+            unitListingPrice = parseFloat(prodData.mrp || prodData.salePrice || unitListingPrice);
+            unitOrderPrice = parseFloat(prodData.salePrice || unitOrderPrice);
+          }
+        } catch (dbErr) {
+          console.warn(`[Price Validation Notice] Product lookup failed for ${productId}, using client payload:`, dbErr.message);
+        }
+      }
+
       const unitDiscount = Math.max(0.0, unitListingPrice - unitOrderPrice);
+      const itemListingTotal = unitListingPrice * qty;
+      const itemOrderTotal = unitOrderPrice * qty;
+      const itemTotalDiscount = unitDiscount * qty;
 
-      const itemListingPrice = parseFloat(item.itemListingPrice || (unitListingPrice * qty));
-      const itemOrderPrice = parseFloat(item.itemOrderPrice || (unitOrderPrice * qty));
-      const itemTotalDiscount = parseFloat(item.itemTotalDiscount || item.itemDiscount || (unitDiscount * qty));
+      validatedListingSubtotal += itemListingTotal;
+      validatedSubtotal += itemOrderTotal;
+      validatedDiscount += itemTotalDiscount;
 
-      calcTotalDiscount += itemTotalDiscount;
-      calcItemsSubtotal += itemListingPrice;
-
-      return {
-        productId: item.productId || item.product_id || '',
-        productTitle: item.productTitle || item.product_title || '',
+      validatedItems.push({
+        productId: productId || '',
+        productTitle: productTitle,
         category: item.category || 'flower',
         quantity: qty,
         listingPrice: unitListingPrice,
         orderPrice: unitOrderPrice,
         discount: unitDiscount,
-        itemListingPrice: itemListingPrice,
-        itemOrderPrice: itemOrderPrice,
+        itemListingPrice: itemListingTotal,
+        itemOrderPrice: itemOrderTotal,
         itemTotalDiscount: itemTotalDiscount,
         imageUrl: item.imageUrl || item.product_image || null,
         cakeMessage: item.cakeMessage || null,
         addons: item.addons || []
-      };
-    });
+      });
+    }
 
-    const finalItemsSubtotal = parseFloat(itemsSubtotal || items_subtotal || itemsSubtotalListing || calcItemsSubtotal);
-    const finalTotalDiscount = parseFloat(totalDiscount || total_discount || calcTotalDiscount);
+    const addonsSubtotalVal = parseFloat(addons_subtotal || 0.0);
+    const deliveryTotalVal = parseFloat(delivery_total || 0.0);
+    
+    // Server-calculated grand total
+    const computedGrandTotal = validatedSubtotal + addonsSubtotalVal + deliveryTotalVal;
+    const finalGrandTotal = computedGrandTotal > 0 ? computedGrandTotal : parseFloat(grand_total || 0.0);
+
+    const firstItem = items && items.length > 0 ? items[0] : {};
+    const globalDeliveryDate = req.body.deliveryDate || req.body.delivery_date || firstItem.deliveryDate || firstItem.delivery_date || new Date().toISOString();
+    const globalDeliverySlot = req.body.deliverySlot || req.body.delivery_slot || firstItem.deliverySlot || firstItem.delivery_slot || 'Standard Delivery';
 
     const deliveryDetailsObj = req.body.deliveryDetails && typeof req.body.deliveryDetails === 'object'
       ? {
@@ -112,6 +136,30 @@ export const createOrder = async (req, res) => {
           deliverySlot: globalDeliverySlot,
         };
 
+    const isCod = (payment_method || '').toLowerCase() === 'cod';
+
+    let razorpayOrderId = null;
+    let amountInPaise = Math.round(finalGrandTotal * 100);
+
+    if (!isCod && razorpay) {
+      try {
+        const razorpayOrder = await razorpay.orders.create({
+          amount: amountInPaise,
+          currency: 'INR',
+          receipt: `rcpt_${orderId.replace(/-/g, '_')}`,
+          notes: {
+            orderId: orderId,
+            userId: req.body.userId || req.body.user_id || '',
+            recipientPhone: recipient_phone,
+          }
+        });
+        razorpayOrderId = razorpayOrder.id;
+        console.log(`[Razorpay Order Created] Order ID: ${orderId} -> Razorpay Order ID: ${razorpayOrderId}`);
+      } catch (rpErr) {
+        console.error('Error creating Razorpay Order via SDK:', rpErr);
+      }
+    }
+
     const orderDocument = {
       id: orderId,
       orderId: orderId,
@@ -119,140 +167,77 @@ export const createOrder = async (req, res) => {
       userPhone: req.body.userPhone || req.body.user_phone || recipient_phone,
       recipientName: recipient_name,
       recipientPhone: recipient_phone,
-      recipient_name,
-      recipient_phone,
+      recipient_name: recipient_name,
+      recipient_phone: recipient_phone,
       deliveryAddress: delivery_address,
-      delivery_address,
+      delivery_address: delivery_address,
       deliveryDetails: deliveryDetailsObj,
       giftMessage: gift_message || null,
       gift_message: gift_message || null,
-      itemsSubtotal: finalItemsSubtotal,
-      items_subtotal: finalItemsSubtotal,
-      totalDiscount: finalTotalDiscount,
-      total_discount: finalTotalDiscount,
-      addonsSubtotal: parseFloat(addons_subtotal || 0.0),
-      addons_subtotal: parseFloat(addons_subtotal || 0.0),
-      deliveryCharges: parseFloat(delivery_total || 0.0),
-      delivery_total: parseFloat(delivery_total || 0.0),
-      grandTotal: parseFloat(grand_total || 0.0),
-      grand_total: parseFloat(grand_total || 0.0),
-      paymentMethod: payment_method || 'COD',
-      payment_method: payment_method || 'COD',
-      paymentStatus: 'PENDING_COD',
-      payment_status: 'pending',
-      orderStatus: 'PLACED',
-      status: 'PLACED',
-      razorpayPaymentId: '',
-      razorpay_order_id: null,
+      itemsSubtotal: validatedListingSubtotal,
+      items_subtotal: validatedListingSubtotal,
+      totalDiscount: validatedDiscount,
+      total_discount: validatedDiscount,
+      addonsSubtotal: addonsSubtotalVal,
+      addons_subtotal: addonsSubtotalVal,
+      deliveryCharges: deliveryTotalVal,
+      delivery_total: deliveryTotalVal,
+      grandTotal: finalGrandTotal,
+      grand_total: finalGrandTotal,
+      currency: 'INR',
+      paymentMethod: payment_method || (isCod ? 'COD' : 'ONLINE'),
+      payment_method: payment_method || (isCod ? 'COD' : 'ONLINE'),
+      paymentStatus: isCod ? 'PENDING_COD' : 'PENDING',
+      payment_status: isCod ? 'pending_cod' : 'pending',
+      orderStatus: isCod ? 'PLACED' : 'PAYMENT_PENDING',
+      status: isCod ? 'PLACED' : 'PAYMENT_PENDING',
+      razorpayOrderId: razorpayOrderId,
+      razorpay_order_id: razorpayOrderId,
+      razorpayPaymentId: null,
       razorpay_payment_id: null,
       razorpay_signature: null,
       delivery_status: 'pending',
-      items: formattedItems,
+      items: validatedItems,
       createdAt: new Date().toISOString(),
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
 
     // Save order in Firestore
     await db.collection('orders').doc(orderId).set(orderDocument);
 
-    // Handle Payment Method Integration
-    if (payment_method === 'cod') {
-      console.log(`COD order placed: ${orderId}`);
+    if (isCod) {
+      console.log(`COD Order Placed Successfully: ${orderId}`);
       return res.status(201).json({
         success: true,
         message: 'Order created successfully (COD).',
         orderId: orderId,
         paymentMethod: 'cod',
-        grandTotal: grandTotal,
+        grandTotal: finalGrandTotal,
       });
     }
 
-    // Razorpay Payment Link Integration
-    if (razorpay) {
-      try {
-        const amountInPaisa = Math.round(parseFloat(grandTotal) * 100);
-
-        const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-        const host = req.get('host');
-        const callbackUrl = `${protocol}://${host}/api/orders/callback`;
-
-        const plinkOptions = {
-          amount: amountInPaisa,
-          currency: 'INR',
-          accept_partial: false,
-          reference_id: orderId,
-          description: `Payment Receipt for Flower Studio Order ${orderId}`,
-          customer: {
-            name: recipient_name,
-            contact: recipient_phone,
-            email: 'customer@flowerstudio.com',
-          },
-          notify: {
-            sms: false,
-            email: false
-          },
-          reminder_enable: false,
-          callback_url: callbackUrl,
-          callback_method: 'get',
-          options: {
-            checkout: {
-              method: {
-                card: true,
-                upi: true,
-                netbanking: true,
-                wallet: true
-              }
-            }
-          }
-        };
-
-        const paymentLink = await razorpay.paymentLink.create(plinkOptions);
-
-        // Update order record with Razorpay Payment Link ID in Firestore
-        await db.collection('orders').doc(orderId).update({
-          razorpay_order_id: paymentLink.id
-        });
-
-        console.log(`Razorpay Payment Link generated: ${paymentLink.id} (URL: ${paymentLink.short_url})`);
-
-        return res.status(201).json({
-          success: true,
-          message: 'Razorpay payment link generated.',
-          orderId: orderId,
-          paymentLink: paymentLink.short_url,
-          paymentMethod: payment_method,
-          grandTotal: grandTotal,
-          isSimulated: false
-        });
-      } catch (err) {
-        console.error('Error creating Razorpay Payment Link, falling back to mock checkout:', err);
-      }
-    }
-
-    // Fallback Mock Hosted Checkout Page URL
-    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-    const host = req.get('host');
-    const mockCheckoutUrl = `${protocol}://${host}/api/orders/mock-checkout/${orderId}`;
-    console.log(`Mock payment link generated: ${orderId} -> URL: ${mockCheckoutUrl}`);
     return res.status(201).json({
       success: true,
-      message: 'Payment link simulated (mock hosted checkout).',
+      message: 'Razorpay order created successfully.',
       orderId: orderId,
-      paymentLink: mockCheckoutUrl,
-      paymentMethod: payment_method,
-      grandTotal: grandTotal,
-      isSimulated: true
+      razorpayOrderId: razorpayOrderId || `order_sim_${Date.now()}`,
+      amount: amountInPaise,
+      currency: 'INR',
+      keyId: process.env.RAZORPAY_KEY_ID || 'rzp_test_TACOfiOWpIflBg',
+      grandTotal: finalGrandTotal,
+      isSimulated: !razorpayOrderId,
     });
 
   } catch (error) {
     console.error('Error placing order in Firestore:', error);
-    return res.status(500).json({ success: false, message: 'Internal Server Error.' });
+    return res.status(500).json({ success: false, message: 'Failed to create order on server.' });
   }
 };
 
 /**
- * Verify Payment Signature
- * POST /api/orders/verify
+ * Verify Payment Signature (Client Callback Verification)
+ * POST /api/orders/verify or POST /api/payments/verify
  */
 export const verifyPayment = async (req, res) => {
   const {
@@ -278,29 +263,46 @@ export const verifyPayment = async (req, res) => {
 
     const order = docSnap.data();
 
-    // If simulated or keys are absent
-    if (isSimulated || !razorpay || razorpay_signature === 'simulated_signature_ok') {
+    // Idempotency check: If already marked PAID, return success immediately
+    if (order.paymentStatus === 'PAID' || order.payment_status === 'paid') {
+      console.log(`Order ${orderId} already verified and marked as PAID.`);
+      return res.status(200).json({
+        success: true,
+        message: 'Payment already verified.',
+        orderId: orderId,
+      });
+    }
+
+    // Simulated verification or fallback mode
+    if (isSimulated || !process.env.RAZORPAY_KEY_SECRET || razorpay_signature === 'simulated_signature_ok') {
       const finalPaymentId = razorpay_payment_id || `pay_sim_${Math.random().toString(36).substr(2, 9)}`;
-      const pMethod = paymentMethod || order.payment_method;
-      const pStatus = pMethod === 'cod' ? 'pending' : 'paid';
+      const pMethod = paymentMethod || order.paymentMethod || 'ONLINE';
 
       await docRef.update({
-        payment_status: pStatus,
+        paymentStatus: 'PAID',
+        payment_status: 'paid',
+        orderStatus: 'CONFIRMED',
+        status: 'CONFIRMED',
+        razorpayPaymentId: finalPaymentId,
         razorpay_payment_id: finalPaymentId,
         razorpay_signature: razorpay_signature || 'simulated_sig',
         delivery_status: 'handcrafting',
-        payment_method: pMethod
+        paymentMethod: pMethod,
+        payment_method: pMethod,
+        updatedAt: new Date().toISOString()
       });
-      console.log(`Order ${orderId} verified successfully (simulated)`);
+
+      console.log(`Order ${orderId} verified successfully (simulated/fallback mode)`);
       return res.status(200).json({
         success: true,
-        message: 'Payment verified and saved successfully (Simulated mode).',
+        message: 'Payment verified successfully (Simulated mode).',
         orderId: orderId
       });
     }
 
-    // Verify Real Signature
-    const dataToVerify = razorpay_order_id + '|' + razorpay_payment_id;
+    // Verify Real Razorpay Signature using HMAC SHA-256
+    const rzpOrderId = razorpay_order_id || order.razorpayOrderId || order.razorpay_order_id;
+    const dataToVerify = rzpOrderId + '|' + razorpay_payment_id;
     const generatedSignature = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(dataToVerify.toString())
@@ -308,21 +310,33 @@ export const verifyPayment = async (req, res) => {
 
     if (generatedSignature === razorpay_signature) {
       await docRef.update({
+        paymentStatus: 'PAID',
         payment_status: 'paid',
+        orderStatus: 'CONFIRMED',
+        status: 'CONFIRMED',
+        razorpayPaymentId: razorpay_payment_id,
         razorpay_payment_id: razorpay_payment_id,
         razorpay_signature: razorpay_signature,
-        delivery_status: 'handcrafting'
+        delivery_status: 'handcrafting',
+        updatedAt: new Date().toISOString()
       });
-      console.log(`Order ${orderId} verified successfully (Real Razorpay)`);
+
+      console.log(`Order ${orderId} verified successfully via HMAC SHA-256 Signature!`);
       return res.status(200).json({
         success: true,
         message: 'Payment signature verified successfully.',
         orderId: orderId
       });
     } else {
-      await docRef.update({ payment_status: 'failed' });
+      await docRef.update({
+        paymentStatus: 'FAILED',
+        payment_status: 'failed',
+        orderStatus: 'PAYMENT_FAILED',
+        status: 'PAYMENT_FAILED',
+        updatedAt: new Date().toISOString()
+      });
       console.error(`Invalid Razorpay signature for order ${orderId}`);
-      return res.status(400).json({ success: false, message: 'Invalid payment signature verified.' });
+      return res.status(400).json({ success: false, message: 'Invalid payment signature.' });
     }
 
   } catch (error) {
@@ -330,6 +344,199 @@ export const verifyPayment = async (req, res) => {
     return res.status(500).json({ success: false, message: 'Internal Server Error during verification.' });
   }
 };
+
+/**
+ * Handle Webhook Events from Razorpay
+ * POST /api/payments/webhook or POST /api/orders/webhook
+ * Handled events:
+ * - payment.authorized
+ * - payment.captured
+ * - payment.failed
+ * - order.paid
+ * - refund.created
+ * - refund.processed
+ * - refund.failed
+ */
+export const handleWebhook = async (req, res) => {
+  try {
+    const signature = req.headers['x-razorpay-signature'];
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+
+    if (!webhookSecret) {
+      console.error('RAZORPAY_WEBHOOK_SECRET is not configured in server .env.');
+      return res.status(500).send('Webhook secret missing in server config.');
+    }
+
+    if (!signature) {
+      console.error('Missing x-razorpay-signature header in webhook request');
+      return res.status(400).send('Missing signature header');
+    }
+
+    // Convert raw body Buffer or string to UTF-8 for HMAC SHA-256 computation
+    const rawBody = Buffer.isBuffer(req.body)
+      ? req.body.toString('utf8')
+      : (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
+
+    const expectedSignature = crypto
+      .createHmac('sha256', webhookSecret)
+      .update(rawBody)
+      .digest('hex');
+
+    if (signature !== expectedSignature) {
+      console.error('Razorpay Webhook signature verification failed!', {
+        received: signature,
+        computed: expectedSignature
+      });
+      return res.status(400).send('Invalid webhook signature');
+    }
+
+    const event = JSON.parse(rawBody);
+    console.log(`==================================================`);
+    console.log(`[Razorpay Webhook Triggered] Event: ${event.event}`);
+    console.log(`==================================================`);
+
+    const payload = event.payload || {};
+
+    switch (event.event) {
+      case 'payment.authorized': {
+        const payment = payload.payment?.entity;
+        if (payment) {
+          const rzpOrderId = payment.order_id;
+          const paymentId = payment.id;
+          await _updateOrderInFirestoreByRzpId(rzpOrderId, {
+            paymentStatus: 'AUTHORIZED',
+            payment_status: 'authorized',
+            razorpayPaymentId: paymentId,
+            razorpay_payment_id: paymentId,
+            updatedAt: new Date().toISOString()
+          });
+        }
+        break;
+      }
+
+      case 'payment.captured':
+      case 'order.paid': {
+        const payment = payload.payment?.entity;
+        const orderEntity = payload.order?.entity;
+        const rzpOrderId = payment?.order_id || orderEntity?.id;
+        const paymentId = payment?.id;
+
+        if (rzpOrderId) {
+          await _updateOrderInFirestoreByRzpId(rzpOrderId, {
+            paymentStatus: 'PAID',
+            payment_status: 'paid',
+            orderStatus: 'CONFIRMED',
+            status: 'CONFIRMED',
+            delivery_status: 'handcrafting',
+            razorpayPaymentId: paymentId || '',
+            razorpay_payment_id: paymentId || '',
+            updatedAt: new Date().toISOString()
+          });
+        }
+        break;
+      }
+
+      case 'payment.failed': {
+        const payment = payload.payment?.entity;
+        if (payment) {
+          const rzpOrderId = payment.order_id;
+          await _updateOrderInFirestoreByRzpId(rzpOrderId, {
+            paymentStatus: 'FAILED',
+            payment_status: 'failed',
+            orderStatus: 'PAYMENT_FAILED',
+            status: 'PAYMENT_FAILED',
+            updatedAt: new Date().toISOString()
+          });
+        }
+        break;
+      }
+
+      case 'refund.created':
+      case 'refund.processed': {
+        const refund = payload.refund?.entity;
+        if (refund) {
+          const paymentId = refund.payment_id;
+          await _updateOrderInFirestoreByPaymentId(paymentId, {
+            paymentStatus: 'REFUNDED',
+            payment_status: 'refunded',
+            orderStatus: 'CANCELLED',
+            status: 'CANCELLED',
+            refundId: refund.id,
+            updatedAt: new Date().toISOString()
+          });
+        }
+        break;
+      }
+
+      case 'refund.failed': {
+        const refund = payload.refund?.entity;
+        if (refund) {
+          const paymentId = refund.payment_id;
+          await _updateOrderInFirestoreByPaymentId(paymentId, {
+            paymentStatus: 'REFUND_FAILED',
+            payment_status: 'refund_failed',
+            updatedAt: new Date().toISOString()
+          });
+        }
+        break;
+      }
+
+      default:
+        console.log(`[Razorpay Webhook] Unhandled event type: ${event.event}`);
+    }
+
+    return res.status(200).json({ success: true, message: `Webhook ${event.event} processed successfully.` });
+
+  } catch (error) {
+    console.error('Razorpay Webhook Processing Error:', error);
+    return res.status(500).send('Internal Server Error processing webhook.');
+  }
+};
+
+/**
+ * Helper to update order by razorpayOrderId (Idempotent)
+ */
+async function _updateOrderInFirestoreByRzpId(razorpayOrderId, updatePayload) {
+  if (!razorpayOrderId || !db) return;
+  try {
+    let snap = await db.collection('orders').where('razorpayOrderId', '==', razorpayOrderId).get();
+    if (snap.empty) {
+      snap = await db.collection('orders').where('razorpay_order_id', '==', razorpayOrderId).get();
+    }
+    for (const doc of snap.docs) {
+      const data = doc.data();
+      // Idempotency: Don't downgrade PAID order to FAILED or AUTHORIZED
+      if (data.paymentStatus === 'PAID' && updatePayload.paymentStatus !== 'PAID' && updatePayload.paymentStatus !== 'REFUNDED') {
+        console.log(`[Webhook Idempotency] Skipping status downgrade for order ${doc.id}`);
+        continue;
+      }
+      await doc.ref.update(updatePayload);
+      console.log(`[Webhook Firestore Sync] Updated order ${doc.id} (Razorpay Order ${razorpayOrderId}) -> ${updatePayload.paymentStatus}`);
+    }
+  } catch (e) {
+    console.error(`[Webhook Firestore Error] Failed to update order by rzpOrderId ${razorpayOrderId}:`, e);
+  }
+}
+
+/**
+ * Helper to update order by razorpayPaymentId (Idempotent)
+ */
+async function _updateOrderInFirestoreByPaymentId(paymentId, updatePayload) {
+  if (!paymentId || !db) return;
+  try {
+    let snap = await db.collection('orders').where('razorpayPaymentId', '==', paymentId).get();
+    if (snap.empty) {
+      snap = await db.collection('orders').where('razorpay_payment_id', '==', paymentId).get();
+    }
+    for (const doc of snap.docs) {
+      await doc.ref.update(updatePayload);
+      console.log(`[Webhook Firestore Sync] Updated order ${doc.id} (Payment ID ${paymentId}) -> ${updatePayload.paymentStatus}`);
+    }
+  } catch (e) {
+    console.error(`[Webhook Firestore Error] Failed to update order by paymentId ${paymentId}:`, e);
+  }
+}
+
 
 /**
  * Get Orders by a list of IDs

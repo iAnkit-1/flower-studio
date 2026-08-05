@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import productRoutes           from './routes/productRoutes.js';
 import authRoutes              from './routes/authRoutes.js';
 import orderRoutes             from './routes/orderRoutes.js';
+import paymentRoutes           from './routes/paymentRoutes.js';
 import supportRoutes           from './routes/supportRoutes.js';
 import orgAuthRoutes           from './routes/orgAuthRoutes.js';
 import deliveryChargesRoutes   from './routes/deliveryChargesRoutes.js';
@@ -23,7 +24,7 @@ const corsOptions = {
     callback(null, true);
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Cookie'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Cookie', 'X-Razorpay-Signature'],
   credentials: true,
   optionsSuccessStatus: 200,
 };
@@ -37,7 +38,7 @@ app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', origin);
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Cookie');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Cookie, X-Razorpay-Signature');
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -45,6 +46,11 @@ app.use((req, res, next) => {
 });
 
 app.use(cookieParser());
+
+// Webhook routes MUST process raw body buffer BEFORE global express.json() for signature verification
+app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
+app.use('/api/orders/webhook',   express.raw({ type: 'application/json' }));
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
@@ -52,6 +58,7 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 app.use('/api/products',          productRoutes);
 app.use('/api/auth',              authRoutes);
 app.use('/api/orders',            orderRoutes);
+app.use('/api/payments',          paymentRoutes);
 app.use('/api/support',           supportRoutes);
 app.use('/api/delivery-charges',  deliveryChargesRoutes);
 
