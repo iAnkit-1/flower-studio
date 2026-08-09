@@ -10,6 +10,7 @@ import paymentRoutes           from './routes/paymentRoutes.js';
 import supportRoutes           from './routes/supportRoutes.js';
 import orgAuthRoutes           from './routes/orgAuthRoutes.js';
 import deliveryChargesRoutes   from './routes/deliveryChargesRoutes.js';
+import accountDeletionRoutes   from './routes/accountDeletionRoutes.js';
 import { seedDeliveryCharges } from './controllers/deliveryChargesController.js';
 
 dotenv.config();
@@ -17,10 +18,23 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Allowed Origins for Web Portals & Production Domains
+const allowedOrigins = [
+  'https://www.flowerstudiobypushpraj.com',
+  'https://flowerstudiobypushpraj.com',
+  'https://flowerstudio.vercel.app',
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://localhost:8080',
+  'http://localhost:5000',
+];
+
 // CORS configuration supporting HttpOnly Cookies & Bearer Tokens across Web & APK
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow any origin or requests without origin (e.g. native mobile app, Postman)
+    if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app') || origin.endsWith('flowerstudiobypushpraj.com')) {
+      return callback(null, true);
+    }
     callback(null, true);
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
@@ -54,13 +68,16 @@ app.use('/api/orders/webhook',   express.raw({ type: 'application/json' }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
-// Customer routes (Firebase Auth)
-app.use('/api/products',          productRoutes);
-app.use('/api/auth',              authRoutes);
-app.use('/api/orders',            orderRoutes);
-app.use('/api/payments',          paymentRoutes);
-app.use('/api/support',           supportRoutes);
-app.use('/api/delivery-charges',  deliveryChargesRoutes);
+// Customer routes (Firebase Auth & Public Data)
+app.use('/api/products',                 productRoutes);
+app.use('/api/auth',                     authRoutes);
+app.use('/api/orders',                   orderRoutes);
+app.use('/api/payments',                 paymentRoutes);
+app.use('/api/support',                  supportRoutes);
+app.use('/api/delivery-charges',         deliveryChargesRoutes);
+app.use('/api/account-deletion-request',  accountDeletionRoutes);
+app.use('/api/account-deletion-requests', accountDeletionRoutes);
+app.use('/api/account',                  accountDeletionRoutes);
 
 // Organization routes (Custom JWT)
 app.use('/api/org/auth', orgAuthRoutes);
