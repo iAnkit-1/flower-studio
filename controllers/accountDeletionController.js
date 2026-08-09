@@ -95,10 +95,8 @@ export const requestAccountDeletion = async (req, res) => {
       updatedAt: requestedAt,
     };
 
-    // Store primarily in 'account_deletions' collection, and mirror in 'account_deletion_requests'
+    // Store strictly in 'account_deletions' collection only
     await db.collection('account_deletions').doc(requestId).set(deletionRecord);
-    await db.collection('account_deletion_requests').doc(requestId).set(deletionRecord);
-    await db.collection('deletion_requests').doc(requestId).set(deletionRecord).catch(() => {});
 
     console.log(`[Account Deletion] Recorded deletion request ${requestId} in 'account_deletions' for identifier: ${rawInput} (User ID: ${matchedUserId || 'None'})`);
 
@@ -195,8 +193,6 @@ export const updateDeletionRequestStatus = async (req, res) => {
     }
 
     await docRef.update(updateData);
-    await db.collection('account_deletion_requests').doc(requestId).update(updateData).catch(() => {});
-    await db.collection('deletion_requests').doc(requestId).update(updateData).catch(() => {});
 
     // If completed and userId is known, mark user profile as deleted
     const reqData = docSnap.data();
