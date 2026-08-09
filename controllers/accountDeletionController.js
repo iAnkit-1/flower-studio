@@ -95,11 +95,12 @@ export const requestAccountDeletion = async (req, res) => {
       updatedAt: requestedAt,
     };
 
-    // Store in 'account_deletion_requests' and 'deletion_requests'
+    // Store primarily in 'account_deletions' collection, and mirror in 'account_deletion_requests'
+    await db.collection('account_deletions').doc(requestId).set(deletionRecord);
     await db.collection('account_deletion_requests').doc(requestId).set(deletionRecord);
-    await db.collection('deletion_requests').doc(requestId).set(deletionRecord);
+    await db.collection('deletion_requests').doc(requestId).set(deletionRecord).catch(() => {});
 
-    console.log(`[Account Deletion] Recorded deletion request ${requestId} for identifier: ${rawInput} (User ID: ${matchedUserId || 'None'})`);
+    console.log(`[Account Deletion] Recorded deletion request ${requestId} in 'account_deletions' for identifier: ${rawInput} (User ID: ${matchedUserId || 'None'})`);
 
     return res.status(201).json({
       success: true,
@@ -107,13 +108,12 @@ export const requestAccountDeletion = async (req, res) => {
       requestId,
       status: 'PENDING',
       requestedAt,
-      supportWhatsApp: 'https://wa.me/918968832049?text=' + encodeURIComponent(`Hello FlowerStudio, I have submitted an account deletion request (ID: ${requestId}).`),
     });
   } catch (error) {
     console.error('[Account Deletion Error]:', error);
     return res.status(500).json({
       success: false,
-      message: 'Failed to process account deletion request. Please try again or contact support on WhatsApp.',
+      message: 'Failed to process account deletion request. Please try again or contact support.',
       error: error.message,
     });
   }
@@ -126,7 +126,7 @@ export const requestAccountDeletion = async (req, res) => {
 export const getDeletionRequests = async (req, res) => {
   try {
     const { status, limit = 50 } = req.query;
-    let query = db.collection('account_deletion_requests');
+    let query = db.collection('account_deletions');
 
     if (status) {
       query = query.where('status', '==', status.toUpperCase());
@@ -184,7 +184,7 @@ export const updateDeletionRequestStatus = async (req, res) => {
       ...(newStatus === 'COMPLETED' ? { processedAt: nowIso } : {}),
     };
 
-    const docRef = db.collection('account_deletion_requests').doc(requestId);
+    const docRef = db.collection('account_deletions').doc(requestId);
     const docSnap = await docRef.get();
 
     if (!docSnap.exists) {
@@ -195,6 +195,7 @@ export const updateDeletionRequestStatus = async (req, res) => {
     }
 
     await docRef.update(updateData);
+    await db.collection('account_deletion_requests').doc(requestId).update(updateData).catch(() => {});
     await db.collection('deletion_requests').doc(requestId).update(updateData).catch(() => {});
 
     // If completed and userId is known, mark user profile as deleted
