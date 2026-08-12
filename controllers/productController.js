@@ -1,14 +1,59 @@
 import { v2 as cloudinary } from 'cloudinary';
 import db from '../config/db.js';
 
-// Configure Cloudinary securely
+
 cloudinary.config({
-  cloud_name: 'dlczsmows',
-  api_key: '849383372191414',
-  api_secret: 'ac3y2X7_p5NhON6NsMrfbDPPQtw'
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Create a new product in the Firestore database
+
+const MAX_IMAGES = 5;
+const CLOUDINARY_FOLDER = 'flower_studio';
+
+
+export const getCloudinaryUploadSignature = async (req, res) => {
+  try {
+    const timestamp = Math.floor(Date.now() / 1000);
+
+    const paramsToSign = {
+      timestamp,
+      folder: CLOUDINARY_FOLDER,
+    };
+
+    const signature = cloudinary.utils.api_sign_request(
+      paramsToSign,
+      process.env.CLOUDINARY_API_SECRET
+    );
+
+    return res.status(200).json({
+      success: true,
+      cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+      apiKey: process.env.CLOUDINARY_API_KEY,
+      timestamp,
+      folder: CLOUDINARY_FOLDER,
+      signature,
+    });
+  } catch (error) {
+    console.error(
+      'Cloudinary signature generation failed:',
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to generate Cloudinary upload signature.',
+    });
+  }
+};
+
+/*
+|--------------------------------------------------------------------------
+| Create Product
+|--------------------------------------------------------------------------
+*/
+
 export const createProduct = async (req, res) => {
   const {
     id,
@@ -31,141 +76,248 @@ export const createProduct = async (req, res) => {
     occasions,
     images,
     addOns,
-    similarItems
+    similarItems,
   } = req.body;
 
-  if (!title || mrp === undefined || salePrice === undefined || !category || !subCategory || !availability || stock === undefined) {
+  /*
+  |--------------------------------------------------------------------------
+  | Validate required fields
+  |--------------------------------------------------------------------------
+  */
+
+  if (
+    !title ||
+    mrp === undefined ||
+    salePrice === undefined ||
+    !category ||
+    !subCategory ||
+    !availability ||
+    stock === undefined
+  ) {
     return res.status(400).json({
       success: false,
-      message: 'Missing required product parameters.'
+      message: 'Missing required product parameters.',
     });
   }
 
-  // Handle Cloudinary Image Uploads for Base64 Strings
-  const uploadedUrls = [];
-  try {
-    if (images && Array.isArray(images)) {
-      for (const img of images) {
-        if (img.startsWith('data:image') || img.length > 1000) {
-          console.log('Uploading base64 image to Cloudinary...');
-          const uploadResult = await cloudinary.uploader.upload(img, {
-            folder: 'flower_studio'
-          });
-          console.log(`Cloudinary upload success: ${uploadResult.secure_url}`);
-          uploadedUrls.push(uploadResult.secure_url);
-        } else {
-          // Keep as is if it's already a web URL
-          uploadedUrls.push(img);
-        }
-      }
-    }
-  } catch (uploadError) {
-    console.error('Cloudinary upload failure:', uploadError);
-    return res.status(500).json({
+  /*
+  |--------------------------------------------------------------------------
+  | Validate images
+  |--------------------------------------------------------------------------
+  */
+
+  if (images !== undefined && !Array.isArray(images)) {
+    return res.status(400).json({
       success: false,
-      message: 'Failed to upload images to Cloudinary.',
-      error: uploadError.message
+      message: 'Images must be an array.',
     });
   }
 
-  const productId = id || `PROD-${Math.floor(1000 + Math.random() * 9000)}`;
+  if (images && images.length > MAX_IMAGES) {
+    return res.status(400).json({
+      success: false,
+      message: `Maximum ${MAX_IMAGES} images are allowed.`,
+    });
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | Images should now ONLY contain Cloudinary URLs.
+  |--------------------------------------------------------------------------
+  */
+
+  const uploadedUrls = images || [];
+
+  const invalidImage = uploadedUrls.some(
+    (image) =>
+      typeof image !== 'string' ||
+      !(
+        image.startsWith('https://res.cloudinary.com/') ||
+        image.startsWith('http://res.cloudinary.com/')
+      )
+  );
+
+  if (invalidImage) {
+    return res.status(400).json({
+      success: false,
+      message:
+        'Invalid image URL. Images must be uploaded to Cloudinary first.',
+    });
+  }
+
+  const productId =
+    id ||
+    `PROD-${Math.floor(1000 + Math.random() * 9000)}`;
 
   const productData = {
     id: productId,
+
     hsnCode: hsnCode || '',
     barcode: barcode || '',
     sku: sku || '',
+
     title,
     description: description || '',
+
     mrp: parseFloat(mrp),
     salePrice: parseFloat(salePrice),
-    discountPercentage: parseFloat(discountPercentage || 0.0),
+
+    discountPercentage: parseFloat(
+      discountPercentage || 0.0
+    ),
+
     ratings: parseFloat(ratings || 4.5),
-    reviewsCount: parseInt(reviewsCount || 0, 10),
+
+    reviewsCount: parseInt(
+      reviewsCount || 0,
+      10
+    ),
+
     category,
     subCategory,
     availability,
+
     stock: parseFloat(stock),
+
     tags: tags || [],
     addons: addons || {},
     occasions: occasions || [],
+
     images: uploadedUrls,
+
     addOns: addOns || [],
     similarItems: similarItems || [],
-    createdAt: new Date().toISOString()
+
+    createdAt: new Date().toISOString(),
   };
 
+  /*
+  |--------------------------------------------------------------------------
+  | Save to Firestore
+  |--------------------------------------------------------------------------
+  */
+
   try {
-    await db.collection('products').doc(productId).set(productData, { merge: true });
+    await db
+      .collection('products')
+      .doc(productId)
+      .set(productData, { merge: true });
+
     return res.status(201).json({
       success: true,
       message: 'Product successfully added to the database!',
-      product: productData
+      product: productData,
     });
   } catch (err) {
-    console.error('Error inserting product record into Firestore:', err);
+    console.error(
+      'Error inserting product record into Firestore:',
+      err
+    );
+
     return res.status(500).json({
       success: false,
-      message: 'Failed to insert product record in database.',
-      error: err.message
+      message:
+        'Failed to insert product record in database.',
+      error: err.message,
     });
   }
 };
 
-// Retrieve all products from the Firestore database
+/*
+|--------------------------------------------------------------------------
+| Get All Products
+|--------------------------------------------------------------------------
+*/
+
 export const getAllProducts = async (req, res) => {
   try {
     let snapshot;
+
     try {
-      snapshot = await db.collection('products').orderBy('createdAt', 'desc').get();
+      snapshot = await db
+        .collection('products')
+        .orderBy('createdAt', 'desc')
+        .get();
     } catch (orderErr) {
-      snapshot = await db.collection('products').get();
+      snapshot = await db
+        .collection('products')
+        .get();
     }
 
-    const productsMapped = snapshot.docs.map(doc => {
+    const productsMapped = snapshot.docs.map((doc) => {
       const data = doc.data();
+
       return {
         id: data.id || doc.id,
+
         hsnCode: data.hsnCode || '',
         barcode: data.barcode || '',
         sku: data.sku || '',
+
         title: data.title || '',
         description: data.description || '',
+
         mrp: parseFloat(data.mrp || 0.0),
-        salePrice: parseFloat(data.salePrice || 0.0),
-        discountPercentage: parseFloat(data.discountPercentage || 0.0),
-        ratings: parseFloat(data.ratings || 0.0),
+        salePrice: parseFloat(
+          data.salePrice || 0.0
+        ),
+
+        discountPercentage: parseFloat(
+          data.discountPercentage || 0.0
+        ),
+
+        ratings: parseFloat(
+          data.ratings || 0.0
+        ),
+
         reviewsCount: data.reviewsCount || 0,
+
         category: data.category || '',
         subCategory: data.subCategory || '',
-        availability: data.availability || 'available',
+
+        availability:
+          data.availability || 'available',
+
         stock: parseFloat(data.stock || 0.0),
+
         tags: data.tags || [],
         addons: data.addons || {},
         occasions: data.occasions || [],
+
         images: data.images || [],
+
         addOns: data.addOns || [],
-        similarItems: data.similarItems || []
+        similarItems: data.similarItems || [],
       };
     });
 
     return res.status(200).json({
       success: true,
-      products: productsMapped
+      products: productsMapped,
     });
   } catch (err) {
-    console.error('Error fetching product records from Firestore:', err);
+    console.error(
+      'Error fetching product records from Firestore:',
+      err
+    );
+
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch product list.',
-      error: err.message
+      error: err.message,
     });
   }
 };
 
-// Update an existing product in Firestore
+/*
+|--------------------------------------------------------------------------
+| Update Product
+|--------------------------------------------------------------------------
+*/
+
 export const updateProduct = async (req, res) => {
   const { id } = req.params;
+
   const {
     hsnCode,
     barcode,
@@ -186,150 +338,232 @@ export const updateProduct = async (req, res) => {
     occasions,
     images,
     addOns,
-    similarItems
+    similarItems,
   } = req.body;
 
-  if (!title || mrp === undefined || salePrice === undefined || !category || !subCategory || !availability || stock === undefined) {
+  /*
+  |--------------------------------------------------------------------------
+  | Validate required fields
+  |--------------------------------------------------------------------------
+  */
+
+  if (
+    !title ||
+    mrp === undefined ||
+    salePrice === undefined ||
+    !category ||
+    !subCategory ||
+    !availability ||
+    stock === undefined
+  ) {
     return res.status(400).json({
       success: false,
-      message: 'Missing required product parameters for update.'
+      message:
+        'Missing required product parameters for update.',
     });
   }
 
-  // Handle Cloudinary Image Uploads for Base64 Strings
-  const uploadedUrls = [];
-  try {
-    if (images && Array.isArray(images)) {
-      for (const img of images) {
-        if (img.startsWith('data:image') || img.length > 1000) {
-          console.log('Uploading base64 image to Cloudinary...');
-          const uploadResult = await cloudinary.uploader.upload(img, {
-            folder: 'flower_studio'
-          });
-          uploadedUrls.push(uploadResult.secure_url);
-        } else {
-          uploadedUrls.push(img);
-        }
-      }
-    }
-  } catch (uploadError) {
-    console.error('Cloudinary upload failure:', uploadError);
-    return res.status(500).json({
+  /*
+  |--------------------------------------------------------------------------
+  | Validate images
+  |--------------------------------------------------------------------------
+  */
+
+  if (images !== undefined && !Array.isArray(images)) {
+    return res.status(400).json({
       success: false,
-      message: 'Failed to upload images to Cloudinary for update.',
-      error: uploadError.message
+      message: 'Images must be an array.',
+    });
+  }
+
+  if (images && images.length > MAX_IMAGES) {
+    return res.status(400).json({
+      success: false,
+      message: `Maximum ${MAX_IMAGES} images are allowed.`,
     });
   }
 
   try {
-    const docRef = db.collection('products').doc(id);
+    const docRef = db
+      .collection('products')
+      .doc(id);
+
     const docSnap = await docRef.get();
 
     if (!docSnap.exists) {
       return res.status(404).json({
         success: false,
-        message: 'Product not found.'
+        message: 'Product not found.',
+      });
+    }
+
+    const existingData = docSnap.data();
+
+    /*
+    |--------------------------------------------------------------------------
+    | If images aren't supplied, preserve old images.
+    |--------------------------------------------------------------------------
+    */
+
+    const finalImages =
+      images !== undefined
+        ? images
+        : existingData.images || [];
+
+    /*
+    |--------------------------------------------------------------------------
+    | Make sure all images are Cloudinary URLs.
+    |--------------------------------------------------------------------------
+    */
+
+    const invalidImage = finalImages.some(
+      (image) =>
+        typeof image !== 'string' ||
+        !(
+          image.startsWith(
+            'https://res.cloudinary.com/'
+          ) ||
+          image.startsWith(
+            'http://res.cloudinary.com/'
+          )
+        )
+    );
+
+    if (invalidImage) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Invalid image URL. Images must be Cloudinary URLs.',
       });
     }
 
     const updatedData = {
-      hsnCode: hsnCode !== undefined ? hsnCode : (docSnap.data().hsnCode || ''),
-      barcode: barcode !== undefined ? barcode : (docSnap.data().barcode || ''),
-      sku: sku !== undefined ? sku : (docSnap.data().sku || ''),
+      hsnCode:
+        hsnCode !== undefined
+          ? hsnCode
+          : existingData.hsnCode || '',
+
+      barcode:
+        barcode !== undefined
+          ? barcode
+          : existingData.barcode || '',
+
+      sku:
+        sku !== undefined
+          ? sku
+          : existingData.sku || '',
+
       title,
-      description: description !== undefined ? description : (docSnap.data().description || ''),
+
+      description:
+        description !== undefined
+          ? description
+          : existingData.description || '',
+
       mrp: parseFloat(mrp),
+
       salePrice: parseFloat(salePrice),
-      discountPercentage: parseFloat(discountPercentage || 0.0),
-      ratings: parseFloat(ratings || 4.5),
-      reviewsCount: parseInt(reviewsCount || 0, 10),
+
+      discountPercentage: parseFloat(
+        discountPercentage || 0.0
+      ),
+
+      ratings: parseFloat(
+        ratings || 4.5
+      ),
+
+      reviewsCount: parseInt(
+        reviewsCount || 0,
+        10
+      ),
+
       category,
       subCategory,
       availability,
+
       stock: parseFloat(stock),
+
       tags: tags || [],
       addons: addons || {},
       occasions: occasions || [],
-      images: uploadedUrls,
+
+      images: finalImages,
+
       addOns: addOns || [],
       similarItems: similarItems || [],
-      updatedAt: new Date().toISOString()
+
+      updatedAt: new Date().toISOString(),
     };
 
     await docRef.update(updatedData);
 
     const finalDoc = await docRef.get();
+
     return res.status(200).json({
       success: true,
       message: 'Product successfully updated!',
-      product: { id, ...finalDoc.data() }
+
+      product: {
+        id,
+        ...finalDoc.data(),
+      },
     });
   } catch (err) {
-    console.error('Error updating product record in Firestore:', err);
+    console.error(
+      'Error updating product record in Firestore:',
+      err
+    );
+
     return res.status(500).json({
       success: false,
-      message: 'Failed to update product record in database.',
-      error: err.message
+      message:
+        'Failed to update product record in database.',
+      error: err.message,
     });
   }
 };
 
-// Delete a product from Firestore
+/*
+|--------------------------------------------------------------------------
+| Delete Product
+|--------------------------------------------------------------------------
+*/
+
 export const deleteProduct = async (req, res) => {
   const { id } = req.params;
 
   try {
-    const docRef = db.collection('products').doc(id);
+    const docRef = db
+      .collection('products')
+      .doc(id);
+
     const docSnap = await docRef.get();
 
     if (!docSnap.exists) {
       return res.status(404).json({
         success: false,
-        message: 'Product not found.'
+        message: 'Product not found.',
       });
     }
 
     await docRef.delete();
+
     return res.status(200).json({
       success: true,
-      message: 'Product successfully deleted from database!'
+      message:
+        'Product successfully deleted from database!',
     });
   } catch (err) {
-    console.error('Error deleting product record from Firestore:', err);
+    console.error(
+      'Error deleting product from Firestore:',
+      err
+    );
+
     return res.status(500).json({
       success: false,
-      message: 'Failed to delete product from database.',
-      error: err.message
-    });
-  }
-};
-
-// Upload base64 image directly to Cloudinary
-export const uploadImage = async (req, res) => {
-  const { image } = req.body;
-  if (!image) {
-    return res.status(400).json({
-      success: false,
-      message: 'No image data provided.'
-    });
-  }
-
-  try {
-    console.log('Uploading base64 image directly to Cloudinary...');
-    const uploadResult = await cloudinary.uploader.upload(image, {
-      folder: 'flower_studio'
-    });
-    console.log(`Cloudinary direct upload success: ${uploadResult.secure_url}`);
-    return res.json({
-      success: true,
-      url: uploadResult.secure_url
-    });
-  } catch (error) {
-    console.error('Cloudinary direct upload failure:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to upload image directly to Cloudinary.',
-      error: error.message
+      message:
+        'Failed to delete product from database.',
+      error: err.message,
     });
   }
 };
