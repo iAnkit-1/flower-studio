@@ -7,9 +7,14 @@ import {
   deleteProduct,
   getR2UploadPresignedUrl,
   uploadDirectToR2,
+  serveR2Image,
 } from '../controllers/productController.js';
 
 const router = express.Router();
+
+// Public image serving endpoint for Cloudflare R2
+router.get('/images/*', serveR2Image);
+router.get('/image/*', serveR2Image);
 
 // R2 Pre-signed URL generation for direct upload
 router.post('/r2-presigned-url', getR2UploadPresignedUrl);

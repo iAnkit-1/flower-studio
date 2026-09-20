@@ -1,9 +1,90 @@
-import { PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import db from '../config/db.js';
 import { r2Client, BUCKET_NAME, R2_FOLDER, R2_PUBLIC_URL } from '../config/r2.js';
 
 const MAX_IMAGES = 5;
+
+/**
+ * Helper to generate public image URL.
+ * If R2_PUBLIC_URL is a custom domain or pub-xxx.r2.dev, use it.
+ * Otherwise, routes through the backend image serving endpoint.
+ */
+export const getPublicImageUrl = (key, req) => {
+  if (R2_PUBLIC_URL && !R2_PUBLIC_URL.includes('.r2.cloudflarestorage.com')) {
+    return `${R2_PUBLIC_URL}/${key}`;
+  }
+
+  const host = req?.get('host') || 'flower-studio-phi.vercel.app';
+  const protocol = req?.headers?.['x-forwarded-proto'] || req?.protocol || 'https';
+  return `${protocol}://${host}/api/products/images/${key}`;
+};
+
+/**
+ * Helper to normalize image URLs stored with raw S3 API endpoints
+ */
+export const normalizeImageUrl = (url, req) => {
+  if (typeof url !== 'string') return url;
+  if (url.includes('.r2.cloudflarestorage.com')) {
+    const keyIndex = url.indexOf(R2_FOLDER);
+    if (keyIndex !== -1) {
+      const key = url.substring(keyIndex).split('?')[0];
+      return getPublicImageUrl(key, req);
+    }
+  }
+  return url;
+};
+
+/*
+|--------------------------------------------------------------------------
+| Serve R2 Image (Public Image Proxy Stream)
+|--------------------------------------------------------------------------
+*/
+
+export const serveR2Image = async (req, res) => {
+  try {
+    let key = req.params[0] || req.params.key || req.query.key;
+    if (!key) {
+      return res.status(400).send('Missing image key');
+    }
+
+    key = key.replace(/^\/+/, '');
+    if (!key.startsWith(R2_FOLDER)) {
+      key = `${R2_FOLDER}/${key}`;
+    }
+
+    const command = new GetObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: key,
+    });
+
+    const s3Response = await r2Client.send(command);
+
+    res.setHeader('Content-Type', s3Response.ContentType || 'image/jpeg');
+    if (s3Response.ContentLength) {
+      res.setHeader('Content-Length', s3Response.ContentLength);
+    }
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+
+    if (s3Response.Body && typeof s3Response.Body.pipe === 'function') {
+      return s3Response.Body.pipe(res);
+    } else if (s3Response.Body && typeof s3Response.Body.transformToByteArray === 'function') {
+      const byteArray = await s3Response.Body.transformToByteArray();
+      return res.send(Buffer.from(byteArray));
+    } else {
+      const buffer = await s3Response.Body.transformToString('base64');
+      return res.send(Buffer.from(buffer, 'base64'));
+    }
+  } catch (error) {
+    console.error('Error serving image from R2:', error);
+    if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) {
+      return res.status(404).send('Image not found');
+    }
+    return res.status(500).send('Failed to fetch image');
+  }
+};
 
 /*
 |--------------------------------------------------------------------------
@@ -31,10 +112,7 @@ export const getR2UploadPresignedUrl = async (req, res) => {
     });
 
     const uploadUrl = await getSignedUrl(r2Client, command, { expiresIn: 3600 });
-
-    const publicUrl = R2_PUBLIC_URL
-      ? `${R2_PUBLIC_URL}/${key}`
-      : `https://${process.env.R2_ACCOUNT_ID || '98402096d741cf32c4ce0d16403a7f34'}.r2.cloudflarestorage.com/${BUCKET_NAME}/${key}`;
+    const publicUrl = getPublicImageUrl(key, req);
 
     return res.status(200).json({
       success: true,
@@ -86,9 +164,7 @@ export const uploadDirectToR2 = async (req, res) => {
       ContentType: safeContentType,
     }));
 
-    const publicUrl = R2_PUBLIC_URL
-      ? `${R2_PUBLIC_URL}/${key}`
-      : `https://${process.env.R2_ACCOUNT_ID || '98402096d741cf32c4ce0d16403a7f34'}.r2.cloudflarestorage.com/${BUCKET_NAME}/${key}`;
+    const publicUrl = getPublicImageUrl(key, req);
 
     return res.status(200).json({
       success: true,
@@ -136,12 +212,6 @@ export const createProduct = async (req, res) => {
     similarItems,
   } = req.body;
 
-  /*
-  |--------------------------------------------------------------------------
-  | Validate required fields
-  |--------------------------------------------------------------------------
-  */
-
   if (
     !title ||
     mrp === undefined ||
@@ -157,12 +227,6 @@ export const createProduct = async (req, res) => {
     });
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Validate images
-  |--------------------------------------------------------------------------
-  */
-
   if (images !== undefined && !Array.isArray(images)) {
     return res.status(400).json({
       success: false,
@@ -176,12 +240,6 @@ export const createProduct = async (req, res) => {
       message: `Maximum ${MAX_IMAGES} images are allowed.`,
     });
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Validate image URLs
-  |--------------------------------------------------------------------------
-  */
 
   const uploadedUrls = images || [];
 
@@ -247,12 +305,6 @@ export const createProduct = async (req, res) => {
     createdAt: new Date().toISOString(),
   };
 
-  /*
-  |--------------------------------------------------------------------------
-  | Save to Firestore
-  |--------------------------------------------------------------------------
-  */
-
   try {
     await db
       .collection('products')
@@ -303,6 +355,11 @@ export const getAllProducts = async (req, res) => {
     const productsMapped = snapshot.docs.map((doc) => {
       const data = doc.data();
 
+      // Normalize images so any legacy or raw S3 URLs render publicly
+      const normalizedImages = (data.images || []).map((img) =>
+        normalizeImageUrl(img, req)
+      );
+
       return {
         id: data.id || doc.id,
 
@@ -340,7 +397,7 @@ export const getAllProducts = async (req, res) => {
         addons: data.addons || {},
         occasions: data.occasions || [],
 
-        images: data.images || [],
+        images: normalizedImages,
 
         addOns: data.addOns || [],
         similarItems: data.similarItems || [],
@@ -397,12 +454,6 @@ export const updateProduct = async (req, res) => {
     similarItems,
   } = req.body;
 
-  /*
-  |--------------------------------------------------------------------------
-  | Validate required fields
-  |--------------------------------------------------------------------------
-  */
-
   if (
     !title ||
     mrp === undefined ||
@@ -418,12 +469,6 @@ export const updateProduct = async (req, res) => {
         'Missing required product parameters for update.',
     });
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Validate images
-  |--------------------------------------------------------------------------
-  */
 
   if (images !== undefined && !Array.isArray(images)) {
     return res.status(400).json({
@@ -455,22 +500,10 @@ export const updateProduct = async (req, res) => {
 
     const existingData = docSnap.data();
 
-    /*
-    |--------------------------------------------------------------------------
-    | If images aren't supplied, preserve old images.
-    |--------------------------------------------------------------------------
-    */
-
     const finalImages =
       images !== undefined
         ? images
         : existingData.images || [];
-
-    /*
-    |--------------------------------------------------------------------------
-    | Make sure all images are valid URLs.
-    |--------------------------------------------------------------------------
-    */
 
     const invalidImage = finalImages.some(
       (image) =>
@@ -549,6 +582,7 @@ export const updateProduct = async (req, res) => {
     await docRef.update(updatedData);
 
     const finalDoc = await docRef.get();
+    const finalData = finalDoc.data();
 
     return res.status(200).json({
       success: true,
@@ -556,7 +590,8 @@ export const updateProduct = async (req, res) => {
 
       product: {
         id,
-        ...finalDoc.data(),
+        ...finalData,
+        images: (finalData.images || []).map((img) => normalizeImageUrl(img, req)),
       },
     });
   } catch (err) {
@@ -599,7 +634,7 @@ export const deleteProduct = async (req, res) => {
 
     const productData = docSnap.data();
 
-    // Optionally delete images from R2 if they exist and are from our bucket
+    // Delete images from R2 if they exist
     if (Array.isArray(productData?.images)) {
       for (const imgUrl of productData.images) {
         try {
