@@ -35,6 +35,30 @@ export const normalizeImageUrl = (url, req) => {
   return url;
 };
 
+export const normalizeStringArray = (input) => {
+  if (!input) return [];
+  if (Array.isArray(input)) {
+    return Array.from(
+      new Set(
+        input
+          .map((item) => (typeof item === 'string' ? item.trim() : String(item).trim()))
+          .filter((item) => item.length > 0)
+      )
+    );
+  }
+  if (typeof input === 'string') {
+    return Array.from(
+      new Set(
+        input
+          .split(',')
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0)
+      )
+    );
+  }
+  return [];
+};
+
 /*
 |--------------------------------------------------------------------------
 | Serve R2 Image (Public Image Proxy Stream)
@@ -293,9 +317,9 @@ export const createProduct = async (req, res) => {
 
     stock: parseFloat(stock),
 
-    tags: tags || [],
+    tags: normalizeStringArray(tags),
     addons: addons || {},
-    occasions: occasions || [],
+    occasions: normalizeStringArray(occasions),
 
     images: uploadedUrls,
 
@@ -393,9 +417,9 @@ export const getAllProducts = async (req, res) => {
 
         stock: parseFloat(data.stock || 0.0),
 
-        tags: data.tags || [],
+        tags: normalizeStringArray(data.tags),
         addons: data.addons || {},
-        occasions: data.occasions || [],
+        occasions: normalizeStringArray(data.occasions),
 
         images: normalizedImages,
 
@@ -567,9 +591,9 @@ export const updateProduct = async (req, res) => {
 
       stock: parseFloat(stock),
 
-      tags: tags || [],
-      addons: addons || {},
-      occasions: occasions || [],
+      tags: tags !== undefined ? normalizeStringArray(tags) : normalizeStringArray(existingData.tags),
+      addons: addons !== undefined ? addons : existingData.addons || {},
+      occasions: occasions !== undefined ? normalizeStringArray(occasions) : normalizeStringArray(existingData.occasions),
 
       images: finalImages,
 
