@@ -5,12 +5,14 @@ import {
   getAllProducts,
   updateProduct,
   deleteProduct,
-  getCloudinaryUploadSignature,
+  getR2UploadPresignedUrl,
 } from '../controllers/productController.js';
 
 const router = express.Router();
 
-router.post('/upload-signature', getCloudinaryUploadSignature);
+// R2 Pre-signed URL generation for direct upload
+router.post('/r2-presigned-url', getR2UploadPresignedUrl);
+router.post('/upload-signature', getR2UploadPresignedUrl);
 
 // Product CRUD
 router.post('/', createProduct);

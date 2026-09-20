@@ -1,49 +1,55 @@
-import { v2 as cloudinary } from 'cloudinary';
+import { PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import db from '../config/db.js';
-
-
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
-
+import { r2Client, BUCKET_NAME, R2_FOLDER, R2_PUBLIC_URL } from '../config/r2.js';
 
 const MAX_IMAGES = 5;
-const CLOUDINARY_FOLDER = 'flower_studio';
 
+/*
+|--------------------------------------------------------------------------
+| Get R2 Upload Pre-signed URL
+|--------------------------------------------------------------------------
+*/
 
-export const getCloudinaryUploadSignature = async (req, res) => {
+export const getR2UploadPresignedUrl = async (req, res) => {
   try {
-    const timestamp = Math.floor(Date.now() / 1000);
+    const { fileName, contentType } = req.body || {};
 
-    const paramsToSign = {
-      timestamp,
-      folder: CLOUDINARY_FOLDER,
-    };
+    const cleanExt = fileName && fileName.includes('.')
+      ? fileName.split('.').pop().toLowerCase()
+      : 'jpg';
 
-    const signature = cloudinary.utils.api_sign_request(
-      paramsToSign,
-      process.env.CLOUDINARY_API_SECRET
-    );
+    const safeContentType = contentType || `image/${cleanExt === 'jpg' ? 'jpeg' : cleanExt}`;
+    const timestamp = Date.now();
+    const randomSuffix = Math.random().toString(36).substring(2, 8);
+    const key = `${R2_FOLDER}/prod_${timestamp}_${randomSuffix}.${cleanExt}`;
+
+    const command = new PutObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: key,
+      ContentType: safeContentType,
+    });
+
+    const uploadUrl = await getSignedUrl(r2Client, command, { expiresIn: 3600 });
+
+    const publicUrl = R2_PUBLIC_URL
+      ? `${R2_PUBLIC_URL}/${key}`
+      : `https://${process.env.R2_ACCOUNT_ID || '98402096d741cf32c4ce0d16403a7f34'}.r2.cloudflarestorage.com/${BUCKET_NAME}/${key}`;
 
     return res.status(200).json({
       success: true,
-      cloudName: process.env.CLOUDINARY_CLOUD_NAME,
-      apiKey: process.env.CLOUDINARY_API_KEY,
-      timestamp,
-      folder: CLOUDINARY_FOLDER,
-      signature,
+      uploadUrl,
+      publicUrl,
+      key,
+      contentType: safeContentType,
     });
   } catch (error) {
-    console.error(
-      'Cloudinary signature generation failed:',
-      error
-    );
+    console.error('R2 pre-signed URL generation failed:', error);
 
     return res.status(500).json({
       success: false,
-      message: 'Failed to generate Cloudinary upload signature.',
+      message: 'Failed to generate R2 upload URL.',
+      error: error.message,
     });
   }
 };
@@ -122,7 +128,7 @@ export const createProduct = async (req, res) => {
 
   /*
   |--------------------------------------------------------------------------
-  | Images should now ONLY contain Cloudinary URLs.
+  | Validate image URLs
   |--------------------------------------------------------------------------
   */
 
@@ -132,16 +138,15 @@ export const createProduct = async (req, res) => {
     (image) =>
       typeof image !== 'string' ||
       !(
-        image.startsWith('https://res.cloudinary.com/') ||
-        image.startsWith('http://res.cloudinary.com/')
+        image.startsWith('https://') ||
+        image.startsWith('http://')
       )
   );
 
   if (invalidImage) {
     return res.status(400).json({
       success: false,
-      message:
-        'Invalid image URL. Images must be uploaded to Cloudinary first.',
+      message: 'Invalid image URL. Images must be valid HTTP/HTTPS URLs.',
     });
   }
 
@@ -412,7 +417,7 @@ export const updateProduct = async (req, res) => {
 
     /*
     |--------------------------------------------------------------------------
-    | Make sure all images are Cloudinary URLs.
+    | Make sure all images are valid URLs.
     |--------------------------------------------------------------------------
     */
 
@@ -420,20 +425,15 @@ export const updateProduct = async (req, res) => {
       (image) =>
         typeof image !== 'string' ||
         !(
-          image.startsWith(
-            'https://res.cloudinary.com/'
-          ) ||
-          image.startsWith(
-            'http://res.cloudinary.com/'
-          )
+          image.startsWith('https://') ||
+          image.startsWith('http://')
         )
     );
 
     if (invalidImage) {
       return res.status(400).json({
         success: false,
-        message:
-          'Invalid image URL. Images must be Cloudinary URLs.',
+        message: 'Invalid image URL. Images must be valid HTTP/HTTPS URLs.',
       });
     }
 
@@ -544,6 +544,28 @@ export const deleteProduct = async (req, res) => {
         success: false,
         message: 'Product not found.',
       });
+    }
+
+    const productData = docSnap.data();
+
+    // Optionally delete images from R2 if they exist and are from our bucket
+    if (Array.isArray(productData?.images)) {
+      for (const imgUrl of productData.images) {
+        try {
+          if (typeof imgUrl === 'string' && imgUrl.includes(R2_FOLDER)) {
+            const keyIndex = imgUrl.indexOf(R2_FOLDER);
+            const key = imgUrl.substring(keyIndex).split('?')[0];
+            if (key) {
+              await r2Client.send(new DeleteObjectCommand({
+                Bucket: BUCKET_NAME,
+                Key: key,
+              }));
+            }
+          }
+        } catch (delErr) {
+          console.warn(`Could not delete image from R2 (${imgUrl}):`, delErr.message);
+        }
+      }
     }
 
     await docRef.delete();
