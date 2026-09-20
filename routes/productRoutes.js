@@ -6,6 +6,7 @@ import {
   updateProduct,
   deleteProduct,
   getR2UploadPresignedUrl,
+  uploadDirectToR2,
 } from '../controllers/productController.js';
 
 const router = express.Router();
@@ -13,6 +14,9 @@ const router = express.Router();
 // R2 Pre-signed URL generation for direct upload
 router.post('/r2-presigned-url', getR2UploadPresignedUrl);
 router.post('/upload-signature', getR2UploadPresignedUrl);
+
+// R2 Direct backend upload fallback
+router.post('/upload-direct', uploadDirectToR2);
 
 // Product CRUD
 router.post('/', createProduct);

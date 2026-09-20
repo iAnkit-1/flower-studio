@@ -56,6 +56,57 @@ export const getR2UploadPresignedUrl = async (req, res) => {
 
 /*
 |--------------------------------------------------------------------------
+| Direct Backend Upload to R2 (Fallback / Direct)
+|--------------------------------------------------------------------------
+*/
+
+export const uploadDirectToR2 = async (req, res) => {
+  try {
+    const { base64, fileName, contentType } = req.body || {};
+    if (!base64) {
+      return res.status(400).json({ success: false, message: 'Missing base64 image data.' });
+    }
+
+    const cleanBase64 = base64.includes(',') ? base64.split(',')[1] : base64;
+    const buffer = Buffer.from(cleanBase64, 'base64');
+
+    const cleanExt = fileName && fileName.includes('.')
+      ? fileName.split('.').pop().toLowerCase()
+      : 'jpg';
+
+    const safeContentType = contentType || `image/${cleanExt === 'jpg' ? 'jpeg' : cleanExt}`;
+    const timestamp = Date.now();
+    const randomSuffix = Math.random().toString(36).substring(2, 8);
+    const key = `${R2_FOLDER}/prod_${timestamp}_${randomSuffix}.${cleanExt}`;
+
+    await r2Client.send(new PutObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: key,
+      Body: buffer,
+      ContentType: safeContentType,
+    }));
+
+    const publicUrl = R2_PUBLIC_URL
+      ? `${R2_PUBLIC_URL}/${key}`
+      : `https://${process.env.R2_ACCOUNT_ID || '98402096d741cf32c4ce0d16403a7f34'}.r2.cloudflarestorage.com/${BUCKET_NAME}/${key}`;
+
+    return res.status(200).json({
+      success: true,
+      publicUrl,
+      key,
+    });
+  } catch (error) {
+    console.error('Direct R2 upload failed:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to upload image to R2 directly.',
+      error: error.message,
+    });
+  }
+};
+
+/*
+|--------------------------------------------------------------------------
 | Create Product
 |--------------------------------------------------------------------------
 */
