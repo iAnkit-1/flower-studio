@@ -1,6 +1,7 @@
 import db from '../config/db.js';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
+import { normalizeImageUrl } from './productController.js';
 
 // Initialize Razorpay client only if keys are present
 let razorpay = null;
@@ -99,7 +100,7 @@ export const createOrder = async (req, res) => {
         itemListingPrice: itemListingTotal,
         itemOrderPrice: itemOrderTotal,
         itemTotalDiscount: itemTotalDiscount,
-        imageUrl: item.imageUrl || item.product_image || null,
+        imageUrl: normalizeImageUrl(item.imageUrl || item.product_image || null, req),
         cakeMessage: item.cakeMessage || null,
         addons: item.addons || []
       });
@@ -1273,7 +1274,7 @@ export const getAllOrders = async (req, res) => {
       let calcItemsSubtotal = 0.0;
       let calcTotalDiscount = 0.0;
       const mappedItems = items.map(it => {
-        const img = it.productImage || it.imageUrl || it.product_image || '';
+        const img = normalizeImageUrl(it.productImage || it.imageUrl || it.product_image || '', req);
         const qty = parseInt(it.quantity || 1, 10);
         const unitListingPrice = parseFloat(it.listingPrice || 0);
         const unitOrderPrice = parseFloat(it.orderPrice || it.price || 0);
