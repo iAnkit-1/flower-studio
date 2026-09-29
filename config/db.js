@@ -15,7 +15,6 @@ let app = null;
  */
 function cleanPrivateKey(key) {
   if (!key || typeof key !== 'string') return '';
-
   let str = key.trim();
 
   // 1. Remove wrapping single or double quotes
@@ -26,23 +25,18 @@ function cleanPrivateKey(key) {
     str = str.slice(1, -1).trim();
   }
 
-  // 2. Check if string is base64 encoded
-  if (!str.includes('-----BEGIN') && !str.includes('\n') && !str.includes('\\n')) {
-    try {
-      const decoded = Buffer.from(str, 'base64').toString('utf8');
-      if (decoded.includes('-----BEGIN')) {
-        str = decoded.trim();
-      }
-    } catch (e) {}
-  }
+  // 2. Normalize escaped newlines
+  str = str.replace(/\\n/g, '\n').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-  // 3. Normalize windows newlines \r\n and \r to standard \n
-  str = str.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  // 3. Extract pure base64 characters only
+  let base64Only = str
+    .replace(/-----BEGIN[ A-Z0-9_-]+-----/g, '')
+    .replace(/-----END[ A-Z0-9_-]+-----/g, '')
+    .replace(/\s+/g, '')
+    .trim();
 
-  // 4. Convert string literal "\\n" or "\n" to actual newline character \n
-  str = str.replace(/\\n/g, '\n');
-
-  return str.trim();
+  // 4. Return canonical PEM format
+  return `-----BEGIN PRIVATE KEY-----\n${base64Only}\n-----END PRIVATE KEY-----`;
 }
 
 /**
@@ -63,7 +57,7 @@ function getServiceAccount() {
         try {
           const decoded = Buffer.from(rawEnv, 'base64').toString('utf8');
           if (decoded.startsWith('{')) rawEnv = decoded;
-        } catch (e) {}
+        } catch (e) { }
       }
       const sa = typeof rawEnv === 'string' ? JSON.parse(rawEnv) : rawEnv;
       if (sa.private_key) sa.private_key = cleanPrivateKey(sa.private_key);

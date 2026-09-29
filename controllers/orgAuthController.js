@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import db from '../config/db.js';
 
-const JWT_SECRET     = process.env.JWT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
 const STAFF_COLLECTION = 'staff_users';
@@ -40,7 +40,7 @@ export const orgLogin = async (req, res) => {
       });
     }
 
-    const staffDoc  = snapshot.docs[0];
+    const staffDoc = snapshot.docs[0];
     const staffData = staffDoc.data();
 
     // 2. Verify password
@@ -56,8 +56,8 @@ export const orgLogin = async (req, res) => {
     // 3. Sign JWT with role embedded
     const payload = {
       email: staffData.email,
-      name:  staffData.name,
-      role:  staffData.role,
+      name: staffData.name,
+      role: staffData.role,
     };
 
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
@@ -66,10 +66,10 @@ export const orgLogin = async (req, res) => {
     const isProd = process.env.NODE_ENV === 'production' || process.env.VERCEL;
     res.cookie('org_jwt', token, {
       httpOnly: true,
-      secure:   isProd,
+      secure: isProd,
       sameSite: isProd ? 'none' : 'lax',
-      maxAge:   7 * 24 * 60 * 60 * 1000, // 7 days
-      path:     '/',
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      path: '/',
     });
 
     // 5. Update last login timestamp
@@ -81,8 +81,8 @@ export const orgLogin = async (req, res) => {
       token,
       staff: {
         email: staffData.email,
-        name:  staffData.name,
-        role:  staffData.role,
+        name: staffData.name,
+        role: staffData.role,
       }
     });
 
@@ -104,9 +104,9 @@ export const orgLogout = async (req, res) => {
   const isProd = process.env.NODE_ENV === 'production' || process.env.VERCEL;
   res.clearCookie('org_jwt', {
     httpOnly: true,
-    secure:   isProd,
+    secure: isProd,
     sameSite: isProd ? 'none' : 'lax',
-    path:     '/',
+    path: '/',
   });
 
   return res.status(200).json({
@@ -175,8 +175,8 @@ export const verifyOrgToken = async (req, res) => {
       success: true,
       staff: {
         email: decoded.email,
-        name:  decoded.name,
-        role:  decoded.role,
+        name: decoded.name,
+        role: decoded.role,
       }
     });
   } catch (err) {
