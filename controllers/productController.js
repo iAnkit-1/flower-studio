@@ -15,7 +15,7 @@ export const getPublicImageUrl = (key, req) => {
     return `${R2_PUBLIC_URL}/${key}`;
   }
 
-  const host = req?.get('host') || 'flower-studio-phi.vercel.app';
+  const host = req?.get('host') || 'api.flowerstudiobypushpraj.com';
   const protocol = req?.headers?.['x-forwarded-proto'] || req?.protocol || 'https';
   return `${protocol}://${host}/api/products/images/${key}`;
 };
