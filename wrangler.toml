@@ -1,0 +1,11 @@
+name = "flower-studio-backend"
+main = "server.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+NODE_ENV = "production"
+R2_FOLDER = "product-images"
+R2_PUBLIC_URL = "https://98402096d741cf32c4ce0d16403a7f34.r2.cloudflarestorage.com/flower-studio"
+R2_BUCKET_NAME = "flower-studio"
+JWT_EXPIRES_IN = "7d"

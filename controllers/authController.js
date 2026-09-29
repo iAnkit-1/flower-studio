@@ -1,4 +1,18 @@
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import db, { admin } from '../config/db.js';
+
+const GOOGLE_JWKS = createRemoteJWKSet(
+  new URL('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com')
+);
+
+async function verifyEdgeFirebaseIdToken(token) {
+  const projectId = process.env.FIREBASE_PROJECT_ID || 'flower-studio-37861';
+  const { payload } = await jwtVerify(token, GOOGLE_JWKS, {
+    issuer: `https://securetoken.google.com/${projectId}`,
+    audience: projectId,
+  });
+  return payload;
+}
 
 /**
  * 1. Verify Firebase ID Token
@@ -19,14 +33,18 @@ export const verifyFirebaseToken = async (req, res) => {
     let decodedToken = null;
     let extractedPhone = phoneNumber ? phoneNumber.trim() : '';
 
-    if (idToken && admin && admin.apps && admin.apps.length > 0) {
+    if (idToken) {
       try {
-        decodedToken = await admin.auth().verifyIdToken(idToken);
-        if (decodedToken.phone_number) {
+        if (admin && typeof admin.auth === 'function') {
+          decodedToken = await admin.auth().verifyIdToken(idToken);
+        } else {
+          decodedToken = await verifyEdgeFirebaseIdToken(idToken);
+        }
+        if (decodedToken?.phone_number) {
           extractedPhone = decodedToken.phone_number;
         }
-      } catch (adminErr) {
-        console.warn('[Firebase Admin verifyIdToken Warning]:', adminErr.message);
+      } catch (authErr) {
+        console.warn('[Firebase verifyIdToken Warning]:', authErr.message);
       }
     }
 

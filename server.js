@@ -84,22 +84,35 @@ app.use('/api/org/auth', orgAuthRoutes);
 app.use('/api/org',      orgAuthRoutes);
 
 // Seed Firestore collections with defaults on startup
-seedDeliveryCharges();
+try {
+  seedDeliveryCharges();
+} catch (e) {
+  console.warn('[Seed Delivery Charges]:', e.message);
+}
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'OK', message: 'Flower Studio Backend is running (ES6+)' });
+  res.status(200).json({ status: 'OK', message: 'Flower Studio Backend is running on Cloudflare Workers / Node.js' });
 });
 
-// Start Server (only if not running as a Vercel serverless function)
-if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+// Start Server locally when executed directly
+if (process.env.NODE_ENV !== 'production' && !process.env.CF_PAGES && !process.env.WORKER) {
   app.listen(PORT, () => {
     console.log(`==================================================`);
-    console.log(`Flower Studio Backend Server (ES6+) started successfully.`);
-    console.log(`Port: ${PORT}`);
-    console.log(`Environment: Development`);
+    console.log(`Flower Studio Backend Server started on port ${PORT}`);
     console.log(`==================================================`);
   });
 }
 
-export default app;
+// Cloudflare Workers entry handler
+let handler = null;
+try {
+  const { httpServerHandler } = await import('cloudflare:node');
+  if (httpServerHandler) {
+    handler = httpServerHandler(app);
+  }
+} catch (e) {
+  // Not in Cloudflare Workers runtime
+}
+
+export default handler || app;
