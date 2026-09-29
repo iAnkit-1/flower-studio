@@ -59,6 +59,38 @@ export const normalizeStringArray = (input) => {
   return [];
 };
 
+export const normalizeAvailableCombos = (combos) => {
+  if (!combos) return [];
+  const merged = {};
+
+  if (Array.isArray(combos)) {
+    for (const item of combos) {
+      if (typeof item === 'object' && item !== null) {
+        if (item.weight !== undefined && item.price !== undefined) {
+          const w = String(item.weight).trim();
+          const p = typeof item.price === 'number' ? item.price : parseFloat(String(item.price).replace(/[^0-9.]/g, '')) || 0;
+          if (w) merged[w] = p;
+        } else {
+          for (const [k, v] of Object.entries(item)) {
+            const numVal = typeof v === 'number' ? v : parseFloat(String(v).replace(/[^0-9.]/g, '')) || 0;
+            if (k && k.trim()) merged[k.trim()] = numVal;
+          }
+        }
+      }
+    }
+  } else if (typeof combos === 'object' && combos !== null) {
+    for (const [k, v] of Object.entries(combos)) {
+      const numVal = typeof v === 'number' ? v : parseFloat(String(v).replace(/[^0-9.]/g, '')) || 0;
+      if (k && k.trim()) merged[k.trim()] = numVal;
+    }
+  }
+
+  if (Object.keys(merged).length > 0) {
+    return [merged];
+  }
+  return [];
+};
+
 /*
 |--------------------------------------------------------------------------
 | Serve R2 Image (Public Image Proxy Stream)
@@ -234,6 +266,8 @@ export const createProduct = async (req, res) => {
     images,
     addOns,
     similarItems,
+    availableCombos,
+    available_combos,
   } = req.body;
 
   if (
@@ -325,6 +359,7 @@ export const createProduct = async (req, res) => {
 
     addOns: addOns || [],
     similarItems: similarItems || [],
+    availableCombos: normalizeAvailableCombos(availableCombos || available_combos),
 
     createdAt: new Date().toISOString(),
   };
@@ -425,6 +460,7 @@ export const getAllProducts = async (req, res) => {
 
         addOns: data.addOns || [],
         similarItems: data.similarItems || [],
+        availableCombos: normalizeAvailableCombos(data.availableCombos || data.available_combos),
       };
     });
 
@@ -476,6 +512,8 @@ export const updateProduct = async (req, res) => {
     images,
     addOns,
     similarItems,
+    availableCombos,
+    available_combos,
   } = req.body;
 
   if (
@@ -599,6 +637,9 @@ export const updateProduct = async (req, res) => {
 
       addOns: addOns || [],
       similarItems: similarItems || [],
+      availableCombos: (availableCombos !== undefined || available_combos !== undefined)
+        ? normalizeAvailableCombos(availableCombos || available_combos)
+        : normalizeAvailableCombos(existingData.availableCombos || existingData.available_combos),
 
       updatedAt: new Date().toISOString(),
     };
