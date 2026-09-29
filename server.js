@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
+import { httpServerHandler } from 'cloudflare:node';
 
 import productRoutes           from './routes/productRoutes.js';
 import authRoutes              from './routes/authRoutes.js';
@@ -95,24 +96,6 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', message: 'Flower Studio Backend is running on Cloudflare Workers / Node.js' });
 });
 
-// Start Server locally when executed directly
-if (process.env.NODE_ENV !== 'production' && !process.env.CF_PAGES && !process.env.WORKER) {
-  app.listen(PORT, () => {
-    console.log(`==================================================`);
-    console.log(`Flower Studio Backend Server started on port ${PORT}`);
-    console.log(`==================================================`);
-  });
-}
-
-// Cloudflare Workers entry handler
-let handler = null;
-try {
-  const { httpServerHandler } = await import('cloudflare:node');
-  if (httpServerHandler) {
-    handler = httpServerHandler(app);
-  }
-} catch (e) {
-  // Not in Cloudflare Workers runtime
-}
-
-export default handler || app;
+// Cloudflare Workers HTTP Server Handler
+app.listen(3000);
+export default httpServerHandler({ port: 3000 });
