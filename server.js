@@ -61,12 +61,51 @@ app.use((req, res, next) => {
 
 app.use(cookieParser());
 
-// Webhook routes MUST process raw body buffer BEFORE global express.json() for signature verification
-app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
-app.use('/api/orders/webhook',   express.raw({ type: 'application/json' }));
+// Edge-safe Body Parser (eliminates legacy body-parser / iconv-lite stream crash on Cloudflare Workers)
+app.use((req, res, next) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+    return next();
+  }
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ limit: '10mb', extended: true }));
+  const contentType = req.headers['content-type'] || '';
+  const isWebhook = req.path.includes('/webhook');
+
+  const chunks = [];
+  req.on('data', (chunk) => {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+  });
+
+  req.on('end', () => {
+    const rawBuffer = Buffer.concat(chunks);
+    if (isWebhook) {
+      req.body = rawBuffer;
+      return next();
+    }
+
+    const rawStr = rawBuffer.toString('utf8');
+    if (!rawStr) {
+      req.body = {};
+      return next();
+    }
+
+    if (contentType.includes('application/json')) {
+      try {
+        req.body = JSON.parse(rawStr);
+      } catch (err) {
+        req.body = {};
+      }
+    } else if (contentType.includes('application/x-www-form-urlencoded')) {
+      req.body = Object.fromEntries(new URLSearchParams(rawStr));
+    } else {
+      req.body = rawStr;
+    }
+    next();
+  });
+
+  req.on('error', (err) => {
+    next(err);
+  });
+});
 
 // Customer routes (Firebase Auth & Public Data)
 app.use('/api/products',                 productRoutes);
