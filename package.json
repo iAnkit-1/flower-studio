@@ -11,7 +11,8 @@
     "worker:dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "init-db": "node scripts/db_init.js",
-    "seed-staff": "node scripts/seed_staff.js"
+    "seed-staff": "node scripts/seed_staff.js",
+    "migrate-images": "node scripts/migrate_image_urls.js"
   },
 
   "dependencies": {

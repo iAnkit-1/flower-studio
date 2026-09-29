@@ -5,34 +5,37 @@ import { r2Client, BUCKET_NAME, R2_FOLDER, R2_PUBLIC_URL } from '../config/r2.js
 
 const MAX_IMAGES = 5;
 
+export const extractImageFileName = (url) => {
+  if (typeof url !== 'string' || !url) return '';
+  if (url.startsWith('data:image') || url.startsWith('blob:')) return url;
+  const clean = url.split('?')[0].trim();
+  const filename = clean.split('/').pop();
+  return filename;
+};
+
 /**
- * Helper to generate public image URL.
- * If R2_PUBLIC_URL is a custom domain or pub-xxx.r2.dev, use it.
- * Otherwise, routes through the backend image serving endpoint.
+ * Helper to generate public image URL dynamically from a filename or legacy URL
  */
-export const getPublicImageUrl = (key, req) => {
+export const normalizeImageUrl = (url, req) => {
+  if (typeof url !== 'string' || !url) return '';
+  if (url.startsWith('data:image') || url.startsWith('blob:')) return url;
+
+  const filename = extractImageFileName(url);
+  if (!filename) return url;
+
+  const folder = R2_FOLDER || 'product-images';
+
   if (R2_PUBLIC_URL && !R2_PUBLIC_URL.includes('.r2.cloudflarestorage.com')) {
-    return `${R2_PUBLIC_URL}/${key}`;
+    return `${R2_PUBLIC_URL}/${folder}/${filename}`;
   }
 
   const host = req?.get('host') || 'api.flowerstudiobypushpraj.com';
   const protocol = req?.headers?.['x-forwarded-proto'] || req?.protocol || 'https';
-  return `${protocol}://${host}/api/products/images/${key}`;
+  return `${protocol}://${host}/api/products/images/${folder}/${filename}`;
 };
 
-/**
- * Helper to normalize image URLs stored with raw S3 API endpoints
- */
-export const normalizeImageUrl = (url, req) => {
-  if (typeof url !== 'string') return url;
-  if (url.includes('.r2.cloudflarestorage.com')) {
-    const keyIndex = url.indexOf(R2_FOLDER);
-    if (keyIndex !== -1) {
-      const key = url.substring(keyIndex).split('?')[0];
-      return getPublicImageUrl(key, req);
-    }
-  }
-  return url;
+export const getPublicImageUrl = (key, req) => {
+  return normalizeImageUrl(key, req);
 };
 
 export const normalizeStringArray = (input) => {
@@ -299,23 +302,9 @@ export const createProduct = async (req, res) => {
     });
   }
 
-  const uploadedUrls = images || [];
-
-  const invalidImage = uploadedUrls.some(
-    (image) =>
-      typeof image !== 'string' ||
-      !(
-        image.startsWith('https://') ||
-        image.startsWith('http://')
-      )
-  );
-
-  if (invalidImage) {
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid image URL. Images must be valid HTTP/HTTPS URLs.',
-    });
-  }
+  const cleanImageNames = (images || [])
+    .map(extractImageFileName)
+    .filter(Boolean);
 
   const productId =
     id ||
@@ -355,7 +344,7 @@ export const createProduct = async (req, res) => {
     addons: addons || {},
     occasions: normalizeStringArray(occasions),
 
-    images: uploadedUrls,
+    images: cleanImageNames,
 
     addOns: addOns || [],
     similarItems: similarItems || [],
@@ -562,26 +551,14 @@ export const updateProduct = async (req, res) => {
 
     const existingData = docSnap.data();
 
-    const finalImages =
+    const rawImages =
       images !== undefined
         ? images
         : existingData.images || [];
 
-    const invalidImage = finalImages.some(
-      (image) =>
-        typeof image !== 'string' ||
-        !(
-          image.startsWith('https://') ||
-          image.startsWith('http://')
-        )
-    );
-
-    if (invalidImage) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid image URL. Images must be valid HTTP/HTTPS URLs.',
-      });
-    }
+    const finalImages = rawImages
+      .map(extractImageFileName)
+      .filter(Boolean);
 
     const updatedData = {
       hsnCode:
