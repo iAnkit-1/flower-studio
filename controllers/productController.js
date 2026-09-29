@@ -357,7 +357,7 @@ export const createProduct = async (req, res) => {
     await db
       .collection('products')
       .doc(productId)
-      .set(productData, { merge: true });
+      .set(productData);
 
     return res.status(201).json({
       success: true,
@@ -621,7 +621,12 @@ export const updateProduct = async (req, res) => {
       updatedAt: new Date().toISOString(),
     };
 
-    await docRef.update(updatedData);
+    const mergedData = {
+      ...existingData,
+      ...updatedData,
+    };
+
+    await docRef.set(mergedData);
 
     const finalDoc = await docRef.get();
     const finalData = finalDoc.data();
@@ -680,15 +685,12 @@ export const deleteProduct = async (req, res) => {
     if (Array.isArray(productData?.images)) {
       for (const imgUrl of productData.images) {
         try {
-          if (typeof imgUrl === 'string' && imgUrl.includes(R2_FOLDER)) {
-            const keyIndex = imgUrl.indexOf(R2_FOLDER);
-            const key = imgUrl.substring(keyIndex).split('?')[0];
-            if (key) {
-              await r2Client.send(new DeleteObjectCommand({
-                Bucket: BUCKET_NAME,
-                Key: key,
-              }));
-            }
+          const filename = extractImageFileName(imgUrl);
+          if (filename) {
+            await r2Client.send(new DeleteObjectCommand({
+              Bucket: BUCKET_NAME,
+              Key: `${R2_FOLDER}/${filename}`,
+            }));
           }
         } catch (delErr) {
           console.warn(`Could not delete image from R2 (${imgUrl}):`, delErr.message);
