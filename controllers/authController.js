@@ -204,6 +204,7 @@ export const getUserProfile = async (req, res) => {
 export const updateUserProfile = async (req, res) => {
   const {
     phoneNumber,
+    userId,
     fullName,
     email,
     alternateNumber,
@@ -212,17 +213,19 @@ export const updateUserProfile = async (req, res) => {
     district,
     state,
     pincode,
-    addressType
+    addressType,
+    addresses
   } = req.body;
 
-  if (!phoneNumber) {
+  const cleanPhone = (phoneNumber || '').trim();
+  const targetId = cleanPhone || (userId || '').trim();
+
+  if (!targetId) {
     return res.status(400).json({
       success: false,
-      message: 'Mobile number is required for updating profile.'
+      message: 'Mobile number or User ID is required for updating profile.'
     });
   }
-
-  const cleanPhone = phoneNumber.trim();
 
   const updatedAddress = {
     houseNo: houseNo || '',
@@ -234,7 +237,7 @@ export const updateUserProfile = async (req, res) => {
   };
 
   let profilePayload = {
-    id: `USR-${cleanPhone.replace(/\D/g, '')}`,
+    id: `USR-${(cleanPhone || targetId).replace(/\D/g, '')}`,
     phoneNumber: cleanPhone,
     fullName: fullName || '',
     email: email || '',
@@ -243,9 +246,13 @@ export const updateUserProfile = async (req, res) => {
     updatedAt: new Date().toISOString()
   };
 
+  if (Array.isArray(addresses)) {
+    profilePayload.addresses = addresses;
+  }
+
   try {
     if (db) {
-      const userRef = db.collection('users').doc(cleanPhone);
+      const userRef = db.collection('users').doc(targetId);
       const userSnap = await userRef.get();
 
       if (userSnap.exists) {
@@ -261,6 +268,9 @@ export const updateUserProfile = async (req, res) => {
           },
           updatedAt: new Date().toISOString()
         };
+        if (Array.isArray(addresses)) {
+          profilePayload.addresses = addresses;
+        }
         await userRef.update(profilePayload);
       } else {
         profilePayload.orders = [];

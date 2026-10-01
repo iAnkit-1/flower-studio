@@ -445,6 +445,12 @@ export const getAllProducts = async (req, res) => {
 
         images: normalizedImages,
 
+        createdAt: data.createdAt
+          ? (typeof data.createdAt.toDate === 'function'
+              ? data.createdAt.toDate().toISOString()
+              : data.createdAt)
+          : null,
+
         addOns: data.addOns || [],
         similarItems: data.similarItems || [],
         availableCombos: normalizeAvailableCombos(data.availableCombos || data.available_combos),
@@ -470,6 +476,8 @@ export const getAllProducts = async (req, res) => {
           const cat = (p.category || '').toLowerCase().trim();
           return !excludedCategories.includes(cat);
         });
+
+    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=600');
 
     return res.status(200).json({
       success: true,

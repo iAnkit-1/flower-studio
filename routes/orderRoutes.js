@@ -17,7 +17,8 @@ import {
   updateCustomOrder,
   getRequestedOrders,
   createRequestedOrder,
-  updateRequestedOrder
+  updateRequestedOrder,
+  createSubscription
 } from '../controllers/orderController.js';
 
 const router = express.Router();
@@ -33,6 +34,9 @@ router.get('/:orderId/invoice', getInvoice);
 router.get('/:orderId/status', getOrderStatus);
 router.get('/mock-checkout/:orderId', getMockCheckout);
 router.get('/callback', paymentCallback);
+
+// --- Subscriptions ---
+router.post('/subscriptions', createSubscription);
 
 // --- Operational updates ---
 router.put('/:orderId/status', updateOrderStatus); // Update order confirmed/cancelled status

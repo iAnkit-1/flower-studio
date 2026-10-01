@@ -127,3 +127,24 @@ export const updateDeliveryCharge = async (req, res) => {
     return res.status(500).json({ success: false, message: 'Failed to update.', error: err.message });
   }
 };
+
+/**
+ * GET /api/delivery-charges/pincodes
+ * Returns serviceable Tricity pincodes from Firestore.
+ */
+export const getDeliveryPincodes = async (req, res) => {
+  try {
+    const docSnap = await db.collection('delivery_pincodes').doc('tricity').get();
+    if (docSnap.exists) {
+      const data = docSnap.data();
+      res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=86400');
+      return res.status(200).json({
+        success: true,
+        pincodes: data.pincodes || [],
+      });
+    }
+    return res.status(200).json({ success: true, pincodes: [] });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: 'Failed to fetch pincodes.', error: err.message });
+  }
+};

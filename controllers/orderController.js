@@ -1247,18 +1247,47 @@ export const paymentCallback = async (req, res) => {
   }
 };
 
-// Retrieve all regular orders for admin
+// Retrieve orders (supports ?userId=... and ?userPhone=... filtering)
 export const getAllOrders = async (req, res) => {
   try {
+    const { userId, userPhone, phoneNumber } = req.query || {};
+    const targetPhone = (userPhone || phoneNumber || '').trim();
+    const targetUserId = (userId || '').trim();
+
     let snapshot;
-    try {
-      snapshot = await db.collection('orders').orderBy('createdAt', 'desc').get();
-    } catch (e) {
-      snapshot = await db.collection('orders').get();
+    let query = db.collection('orders');
+
+    if (targetUserId) {
+      try {
+        snapshot = await query.where('userId', '==', targetUserId).orderBy('createdAt', 'desc').get();
+      } catch (e) {
+        snapshot = await query.where('userId', '==', targetUserId).get();
+      }
+    } else if (targetPhone) {
+      try {
+        snapshot = await query.where('userPhone', '==', targetPhone).orderBy('createdAt', 'desc').get();
+      } catch (e) {
+        snapshot = await query.where('userPhone', '==', targetPhone).get();
+      }
+
+      if (!snapshot || snapshot.empty) {
+        try {
+          const recSnap = await db.collection('orders').where('deliveryDetails.recipientPhone', '==', targetPhone).get();
+          if (!recSnap.empty) {
+            snapshot = recSnap;
+          }
+        } catch (_) {}
+      }
+    } else {
+      try {
+        snapshot = await query.orderBy('createdAt', 'desc').get();
+      } catch (e) {
+        snapshot = await query.get();
+      }
     }
 
-    if (!snapshot || snapshot.empty) {
-      snapshot = await db.collection('orders').get();
+    if (!snapshot) {
+      snapshot = { docs: [] };
     }
 
     const mapped = snapshot.docs.map(doc => {
@@ -1654,5 +1683,24 @@ export const updateRequestedOrder = async (req, res) => {
   } catch (err) {
     console.error('Error updating requested order in Firestore:', err);
     return res.status(500).json({ success: false, message: 'Failed to update requested order status.', error: err.message });
+  }
+};
+
+// Create daily flower subscription request
+export const createSubscription = async (req, res) => {
+  try {
+    const subDoc = {
+      ...req.body,
+      id: `SUB-${Date.now().toString().slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`,
+      status: req.body.status || 'pending_confirmation',
+      createdAt: new Date().toISOString()
+    };
+    if (db) {
+      await db.collection('subscriptions').add(subDoc);
+    }
+    return res.status(201).json({ success: true, message: 'Subscription created successfully!', subscription: subDoc });
+  } catch (err) {
+    console.error('Error creating subscription:', err);
+    return res.status(500).json({ success: false, message: 'Failed to create subscription.', error: err.message });
   }
 };
