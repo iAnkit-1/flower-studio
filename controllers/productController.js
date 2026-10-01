@@ -25,13 +25,11 @@ export const normalizeImageUrl = (url, req) => {
 
   const folder = R2_FOLDER || 'product-images';
 
-  if (R2_PUBLIC_URL && !R2_PUBLIC_URL.includes('.r2.cloudflarestorage.com')) {
-    return `${R2_PUBLIC_URL}/${folder}/${filename}`;
-  }
+  const cdnBase = (R2_PUBLIC_URL && !R2_PUBLIC_URL.includes('.r2.cloudflarestorage.com'))
+    ? R2_PUBLIC_URL
+    : 'https://cdn.flowerstudiobypushpraj.com';
 
-  const host = req?.get('host') || 'api.flowerstudiobypushpraj.com';
-  const protocol = req?.headers?.['x-forwarded-proto'] || req?.protocol || 'https';
-  return `${protocol}://${host}/api/products/images/${folder}/${filename}`;
+  return `${cdnBase}/${folder}/${filename}`;
 };
 
 export const getPublicImageUrl = (key, req) => {

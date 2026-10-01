@@ -9,7 +9,7 @@ const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY || '3b53eccec397b8a55c9
 
 export const BUCKET_NAME = process.env.R2_BUCKET_NAME || 'flower-studio';
 export const R2_FOLDER = process.env.R2_FOLDER || 'product-images';
-export const R2_PUBLIC_URL = (process.env.R2_PUBLIC_URL || '').replace(/\/+$/, '');
+export const R2_PUBLIC_URL = (process.env.R2_PUBLIC_URL || 'https://cdn.flowerstudiobypushpraj.com').replace(/\/+$/, '');
 
 export const r2Client = new S3Client({
   region: 'auto',
