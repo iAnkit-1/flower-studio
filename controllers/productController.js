@@ -451,9 +451,29 @@ export const getAllProducts = async (req, res) => {
       };
     });
 
+    const excludedCategories = [
+      'cake accessories',
+      'cake accessory',
+      'cake topper',
+      'cake toppers',
+      'greeting card',
+      'greeting cards',
+    ];
+
+    const includeAll =
+      req.query.includeAll === 'true' ||
+      req.query.includeAddons === 'true';
+
+    const filteredProducts = includeAll
+      ? productsMapped
+      : productsMapped.filter((p) => {
+          const cat = (p.category || '').toLowerCase().trim();
+          return !excludedCategories.includes(cat);
+        });
+
     return res.status(200).json({
       success: true,
-      products: productsMapped,
+      products: filteredProducts,
     });
   } catch (err) {
     console.error(
