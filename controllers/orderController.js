@@ -199,15 +199,19 @@ export const createOrder = async (req, res) => {
       razorpay_signature: null,
       delivery_status: 'pending',
       items: validatedItems,
+      stockDeducted: isCod ? true : false,
       createdAt: new Date().toISOString(),
       created_at: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
 
     // Save order in Firestore
-    await db.collection('orders').doc(orderId).set(orderDocument);
+    const orderDocRef = db.collection('orders').doc(orderId);
+    await orderDocRef.set(orderDocument);
 
     if (isCod) {
+      // Deduct stock immediately for COD orders since order is PLACED
+      await _deductOrderStock(orderDocRef, validatedItems, { stockDeducted: false });
       console.log(`COD Order Placed Successfully: ${orderId}`);
       return res.status(201).json({
         success: true,
@@ -293,6 +297,9 @@ export const verifyPayment = async (req, res) => {
         updatedAt: new Date().toISOString()
       });
 
+      // Deduct stock for confirmed order
+      await _deductOrderStock(docRef, order.items, order);
+
       console.log(`Order ${orderId} verified successfully (simulated/fallback mode)`);
       return res.status(200).json({
         success: true,
@@ -321,6 +328,9 @@ export const verifyPayment = async (req, res) => {
         delivery_status: 'handcrafting',
         updatedAt: new Date().toISOString()
       });
+
+      // Deduct stock for confirmed order
+      await _deductOrderStock(docRef, order.items, order);
 
       console.log(`Order ${orderId} verified successfully via HMAC SHA-256 Signature!`);
       return res.status(200).json({
@@ -495,6 +505,164 @@ export const handleWebhook = async (req, res) => {
 };
 
 /**
+ * Helper to deduct stock for products & addons in an order (Idempotent)
+ */
+async function _deductOrderStock(orderDocRef, items, existingOrderData = null) {
+  if (!db || !items || !Array.isArray(items) || items.length === 0) return;
+  try {
+    let orderData = existingOrderData;
+    if (!orderData && orderDocRef) {
+      const snap = await orderDocRef.get();
+      if (snap.exists) {
+        orderData = snap.data();
+      }
+    }
+
+    if (orderData && orderData.stockDeducted === true) {
+      console.log(`[Stock Deduction] Stock already deducted for order ${orderDocRef?.id || orderData.id || orderData.orderId}. Skipping.`);
+      return;
+    }
+
+    // Collect quantities to deduct per product ID
+    const deductions = new Map();
+
+    for (const item of items) {
+      const pId = item.productId || item.product_id || item.id;
+      const qty = parseInt(item.quantity || 1, 10);
+      if (pId && qty > 0) {
+        deductions.set(pId, (deductions.get(pId) || 0) + qty);
+      }
+
+      // Addons deduction
+      if (item.addons && Array.isArray(item.addons)) {
+        for (const addon of item.addons) {
+          const addonId = addon.id || addon.productId || addon.product_id || (addon.product && (addon.product.id || addon.product.productId));
+          const addonQty = parseInt(addon.quantity || 1, 10);
+          if (addonId && addonQty > 0) {
+            deductions.set(addonId, (deductions.get(addonId) || 0) + addonQty);
+          }
+        }
+      }
+    }
+
+    // Update each product's stock in Firestore
+    for (const [productId, qtyToDeduct] of deductions.entries()) {
+      try {
+        const prodRef = db.collection('products').doc(productId);
+        const prodSnap = await prodRef.get();
+        if (prodSnap.exists) {
+          const prodData = prodSnap.data();
+          const currentStock = parseInt(prodData.stock !== undefined ? prodData.stock : 0, 10);
+          const newStock = Math.max(0, currentStock - qtyToDeduct);
+          const updatePayload = {
+            stock: newStock,
+            updatedAt: new Date().toISOString(),
+          };
+          if (newStock === 0) {
+            updatePayload.availability = 'out of stock';
+          }
+          await prodRef.update(updatePayload);
+          console.log(`[Stock Deduction] Product ${productId} stock updated: ${currentStock} -> ${newStock} (-${qtyToDeduct})`);
+        } else {
+          console.warn(`[Stock Deduction] Product ${productId} not found in database.`);
+        }
+      } catch (prodErr) {
+        console.error(`[Stock Deduction] Error updating stock for product ${productId}:`, prodErr);
+      }
+    }
+
+    // Mark stock as deducted on the order document
+    if (orderDocRef) {
+      await orderDocRef.update({
+        stockDeducted: true,
+        updatedAt: new Date().toISOString(),
+      });
+      console.log(`[Stock Deduction] Marked stockDeducted: true for order ${orderDocRef.id}`);
+    }
+  } catch (err) {
+    console.error('[Stock Deduction Error] Failed to deduct order stock:', err);
+  }
+}
+
+/**
+ * Helper to restore stock for products & addons in an order on cancellation/refund (Idempotent)
+ */
+async function _restoreOrderStock(orderDocRef, items, existingOrderData = null) {
+  if (!db || !items || !Array.isArray(items) || items.length === 0) return;
+  try {
+    let orderData = existingOrderData;
+    if (!orderData && orderDocRef) {
+      const snap = await orderDocRef.get();
+      if (snap.exists) {
+        orderData = snap.data();
+      }
+    }
+
+    if (orderData && orderData.stockDeducted !== true) {
+      console.log(`[Stock Restoration] Stock was not deducted or already restored for order ${orderDocRef?.id || orderData?.id}. Skipping.`);
+      return;
+    }
+
+    // Collect quantities to restore per product ID
+    const restorations = new Map();
+
+    for (const item of items) {
+      const pId = item.productId || item.product_id || item.id;
+      const qty = parseInt(item.quantity || 1, 10);
+      if (pId && qty > 0) {
+        restorations.set(pId, (restorations.get(pId) || 0) + qty);
+      }
+
+      // Addons restoration
+      if (item.addons && Array.isArray(item.addons)) {
+        for (const addon of item.addons) {
+          const addonId = addon.id || addon.productId || addon.product_id || (addon.product && (addon.product.id || addon.product.productId));
+          const addonQty = parseInt(addon.quantity || 1, 10);
+          if (addonId && addonQty > 0) {
+            restorations.set(addonId, (restorations.get(addonId) || 0) + addonQty);
+          }
+        }
+      }
+    }
+
+    // Update each product's stock in Firestore
+    for (const [productId, qtyToRestore] of restorations.entries()) {
+      try {
+        const prodRef = db.collection('products').doc(productId);
+        const prodSnap = await prodRef.get();
+        if (prodSnap.exists) {
+          const prodData = prodSnap.data();
+          const currentStock = parseInt(prodData.stock !== undefined ? prodData.stock : 0, 10);
+          const newStock = currentStock + qtyToRestore;
+          const updatePayload = {
+            stock: newStock,
+            updatedAt: new Date().toISOString(),
+          };
+          if (newStock > 0 && prodData.availability === 'out of stock') {
+            updatePayload.availability = 'available';
+          }
+          await prodRef.update(updatePayload);
+          console.log(`[Stock Restoration] Product ${productId} stock restored: ${currentStock} -> ${newStock} (+${qtyToRestore})`);
+        }
+      } catch (prodErr) {
+        console.error(`[Stock Restoration] Error restoring stock for product ${productId}:`, prodErr);
+      }
+    }
+
+    // Mark stock as restored (stockDeducted: false) on the order document
+    if (orderDocRef) {
+      await orderDocRef.update({
+        stockDeducted: false,
+        updatedAt: new Date().toISOString(),
+      });
+      console.log(`[Stock Restoration] Marked stockDeducted: false for order ${orderDocRef.id}`);
+    }
+  } catch (err) {
+    console.error('[Stock Restoration Error] Failed to restore order stock:', err);
+  }
+}
+
+/**
  * Helper to update order by razorpayOrderId (Idempotent)
  */
 async function _updateOrderInFirestoreByRzpId(razorpayOrderId, updatePayload) {
@@ -513,6 +681,13 @@ async function _updateOrderInFirestoreByRzpId(razorpayOrderId, updatePayload) {
       }
       await doc.ref.update(updatePayload);
       console.log(`[Webhook Firestore Sync] Updated order ${doc.id} (Razorpay Order ${razorpayOrderId}) -> ${updatePayload.paymentStatus}`);
+
+      // Stock deduction on confirmation / payment capture
+      if (updatePayload.orderStatus === 'CONFIRMED' || updatePayload.paymentStatus === 'PAID') {
+        await _deductOrderStock(doc.ref, data.items, data);
+      } else if (updatePayload.orderStatus === 'CANCELLED' || updatePayload.paymentStatus === 'REFUNDED') {
+        await _restoreOrderStock(doc.ref, data.items, data);
+      }
     }
   } catch (e) {
     console.error(`[Webhook Firestore Error] Failed to update order by rzpOrderId ${razorpayOrderId}:`, e);
@@ -530,8 +705,16 @@ async function _updateOrderInFirestoreByPaymentId(paymentId, updatePayload) {
       snap = await db.collection('orders').where('razorpay_payment_id', '==', paymentId).get();
     }
     for (const doc of snap.docs) {
+      const data = doc.data();
       await doc.ref.update(updatePayload);
       console.log(`[Webhook Firestore Sync] Updated order ${doc.id} (Payment ID ${paymentId}) -> ${updatePayload.paymentStatus}`);
+
+      // Stock restoration or deduction
+      if (updatePayload.orderStatus === 'CANCELLED' || updatePayload.paymentStatus === 'REFUNDED') {
+        await _restoreOrderStock(doc.ref, data.items, data);
+      } else if (updatePayload.orderStatus === 'CONFIRMED' || updatePayload.paymentStatus === 'PAID') {
+        await _deductOrderStock(doc.ref, data.items, data);
+      }
     }
   } catch (e) {
     console.error(`[Webhook Firestore Error] Failed to update order by paymentId ${paymentId}:`, e);
@@ -1165,10 +1348,17 @@ export const paymentCallback = async (req, res) => {
     if (isSimulated === 'true' || !razorpay || razorpay_signature === 'simulated_signature_ok') {
       await docRef.update({
         payment_status: 'paid',
+        paymentStatus: 'PAID',
+        orderStatus: 'CONFIRMED',
+        status: 'CONFIRMED',
         razorpay_payment_id: razorpay_payment_id || 'pay_sim',
+        razorpayPaymentId: razorpay_payment_id || 'pay_sim',
         razorpay_signature: razorpay_signature || 'sim_sig',
-        delivery_status: 'handcrafting'
+        delivery_status: 'handcrafting',
+        updatedAt: new Date().toISOString()
       });
+      const orderData = docSnap.data();
+      await _deductOrderStock(docRef, orderData.items, orderData);
     } else {
       const text = razorpay_payment_link_id + '|' + razorpay_payment_link_reference_id + '|' + razorpay_payment_link_status + '|' + razorpay_payment_id;
       const expectedSig = crypto
@@ -1179,12 +1369,19 @@ export const paymentCallback = async (req, res) => {
       if (expectedSig === razorpay_signature && razorpay_payment_link_status === 'paid') {
         await docRef.update({
           payment_status: 'paid',
+          paymentStatus: 'PAID',
+          orderStatus: 'CONFIRMED',
+          status: 'CONFIRMED',
           razorpay_payment_id: razorpay_payment_id,
+          razorpayPaymentId: razorpay_payment_id,
           razorpay_signature: razorpay_signature,
-          delivery_status: 'handcrafting'
+          delivery_status: 'handcrafting',
+          updatedAt: new Date().toISOString()
         });
+        const orderData = docSnap.data();
+        await _deductOrderStock(docRef, orderData.items, orderData);
       } else {
-        await docRef.update({ payment_status: 'failed' });
+        await docRef.update({ payment_status: 'failed', paymentStatus: 'FAILED', updatedAt: new Date().toISOString() });
         return res.status(400).send('<h1>Payment Verification Failed</h1>');
       }
     }
@@ -1412,7 +1609,16 @@ export const updateOrderStatus = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Order not found.' });
     }
 
+    const existingData = docSnap.data();
     await docRef.update(updateData);
+
+    const normStatus = (targetStatus || '').toUpperCase();
+    if (normStatus === 'CANCELLED' || normStatus === 'REJECTED') {
+      await _restoreOrderStock(docRef, existingData.items, existingData);
+    } else if (normStatus === 'CONFIRMED' || normStatus === 'PLACED' || normStatus === 'DELIVERED' || normStatus === 'HANDCRAFTING' || normStatus === 'OUT_FOR_DELIVERY') {
+      await _deductOrderStock(docRef, existingData.items, existingData);
+    }
+
     const updatedSnap = await docRef.get();
 
     return res.status(200).json({
