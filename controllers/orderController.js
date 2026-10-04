@@ -108,9 +108,11 @@ export const createOrder = async (req, res) => {
 
     const addonsSubtotalVal = parseFloat(addons_subtotal || 0.0);
     const deliveryTotalVal = parseFloat(delivery_total || 0.0);
+    const couponCode = req.body.couponCode || req.body.coupon_code || null;
+    const couponDiscountVal = parseFloat(req.body.couponDiscount || req.body.coupon_discount || 0.0);
     
     // Server-calculated grand total
-    const computedGrandTotal = validatedSubtotal + addonsSubtotalVal + deliveryTotalVal;
+    const computedGrandTotal = Math.max(0.0, validatedSubtotal + addonsSubtotalVal + deliveryTotalVal - couponDiscountVal);
     const finalGrandTotal = computedGrandTotal > 0 ? computedGrandTotal : parseFloat(grand_total || 0.0);
 
     const firstItem = items && items.length > 0 ? items[0] : {};
@@ -179,6 +181,10 @@ export const createOrder = async (req, res) => {
       items_subtotal: validatedListingSubtotal,
       totalDiscount: validatedDiscount,
       total_discount: validatedDiscount,
+      couponCode: couponCode,
+      coupon_code: couponCode,
+      couponDiscount: couponDiscountVal,
+      coupon_discount: couponDiscountVal,
       addonsSubtotal: addonsSubtotalVal,
       addons_subtotal: addonsSubtotalVal,
       deliveryCharges: deliveryTotalVal,

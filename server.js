@@ -12,7 +12,9 @@ import supportRoutes           from './routes/supportRoutes.js';
 import orgAuthRoutes           from './routes/orgAuthRoutes.js';
 import deliveryChargesRoutes   from './routes/deliveryChargesRoutes.js';
 import accountDeletionRoutes   from './routes/accountDeletionRoutes.js';
+import couponRoutes            from './routes/couponRoutes.js';
 import { seedDeliveryCharges } from './controllers/deliveryChargesController.js';
+import { seedCouponCodes }     from './controllers/couponController.js';
 
 dotenv.config();
 
@@ -76,6 +78,9 @@ app.use('/api/orders',                   orderRoutes);
 app.use('/api/payments',                 paymentRoutes);
 app.use('/api/support',                  supportRoutes);
 app.use('/api/delivery-charges',         deliveryChargesRoutes);
+app.use('/api/coupons',                  couponRoutes);
+app.use('/api/coupon-codes',             couponRoutes);
+app.use('/coupons',                      couponRoutes);
 app.use('/api/account-deletion-request',  accountDeletionRoutes);
 app.use('/api/account-deletion-requests', accountDeletionRoutes);
 app.use('/api/account',                  accountDeletionRoutes);
@@ -87,8 +92,9 @@ app.use('/api/org',      orgAuthRoutes);
 // Seed Firestore collections with defaults on startup
 try {
   seedDeliveryCharges();
+  seedCouponCodes();
 } catch (e) {
-  console.warn('[Seed Delivery Charges]:', e.message);
+  console.warn('[Seed Delivery Charges / Coupons]:', e.message);
 }
 
 // Health check endpoint
