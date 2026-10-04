@@ -1517,6 +1517,8 @@ export const getAllOrders = async (req, res) => {
           productTitle: it.productTitle || it.productName || it.product_title || '',
           productName: it.productTitle || it.productName || it.product_title || '',
           productImage: img,
+          imageUrl: img,
+          product_image: img,
           category: it.category || '',
           quantity: qty,
           listingPrice: unitListingPrice,

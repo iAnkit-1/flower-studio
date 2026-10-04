@@ -4,6 +4,7 @@ import {
   createProduct,
   getAllProducts,
   getGreetingCards,
+  getCelebrationProducts,
   updateProduct,
   deleteProduct,
   getR2UploadPresignedUrl,
@@ -26,6 +27,10 @@ router.post('/upload-direct', uploadDirectToR2);
 
 // Greeting cards dedicated endpoint
 router.get('/greeting-cards', getGreetingCards);
+
+// Celebration products dedicated endpoint
+router.get('/celebration', getCelebrationProducts);
+router.get('/celebration-items', getCelebrationProducts);
 
 // Product CRUD
 router.post('/', createProduct);

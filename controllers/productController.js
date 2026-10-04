@@ -20,6 +20,13 @@ export const normalizeImageUrl = (url, req) => {
   if (typeof url !== 'string' || !url) return '';
   if (url.startsWith('data:image') || url.startsWith('blob:')) return url;
 
+  // Preserve full external web URLs (e.g. from floraindia, unsplash, fnp, etc.)
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    if (!url.includes('.r2.cloudflarestorage.com') && !url.includes('.s3.') && !url.includes('amazonaws.com')) {
+      return url;
+    }
+  }
+
   const filename = extractImageFileName(url);
   if (!filename) return url;
 
@@ -587,6 +594,130 @@ export const getGreetingCards = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch greeting cards.',
+      error: err.message,
+    });
+  }
+};
+
+/*
+|--------------------------------------------------------------------------
+| Get Celebration Items (Cake Toppers, Cake Accessories, Party Specials, Gifts)
+|--------------------------------------------------------------------------
+*/
+export const getCelebrationProducts = async (req, res) => {
+  try {
+    let snapshot;
+    try {
+      snapshot = await db
+        .collection('products')
+        .orderBy('createdAt', 'desc')
+        .get();
+    } catch (orderErr) {
+      snapshot = await db
+        .collection('products')
+        .get();
+    }
+
+    const allMapped = snapshot.docs.map((doc) => {
+      const data = doc.data();
+      const normalizedImages = (data.images || []).map((img) =>
+        normalizeImageUrl(img, req)
+      );
+
+      return {
+        id: data.id || doc.id,
+        hsnCode: data.hsnCode || '',
+        barcode: data.barcode || '',
+        sku: data.sku || '',
+        title: data.title || '',
+        description: data.description || '',
+        mrp: parseFloat(data.mrp || 0.0),
+        salePrice: parseFloat(data.salePrice || 0.0),
+        discountPercentage: parseFloat(data.discountPercentage || 0.0),
+        ratings: parseFloat(data.ratings || 0.0),
+        reviewsCount: data.reviewsCount || 0,
+        category: data.category || '',
+        subCategory: data.subCategory || '',
+        availability: data.availability || 'available',
+        stock: parseFloat(data.stock || 0.0),
+        tags: normalizeStringArray(data.tags),
+        addons: data.addons || {},
+        occasions: normalizeStringArray(data.occasions),
+        images: normalizedImages,
+        createdAt: data.createdAt
+          ? (typeof data.createdAt.toDate === 'function'
+              ? data.createdAt.toDate().toISOString()
+              : data.createdAt)
+          : null,
+        addOns: data.addOns || [],
+        similarItems: data.similarItems || [],
+        availableCombos: normalizeAvailableCombos(data.availableCombos || data.available_combos),
+      };
+    });
+
+    const celebrationProducts = allMapped.filter((p) => {
+      const cat = (p.category || '').toLowerCase().trim();
+      const subCat = (p.subCategory || '').toLowerCase().trim();
+      const title = (p.title || '').toLowerCase().trim();
+      const tags = (p.tags || []).map((t) => t.toLowerCase());
+
+      const isTopper =
+        cat === 'cake topper' ||
+        cat === 'cake toppers' ||
+        cat.includes('topper') ||
+        subCat.includes('topper') ||
+        tags.includes('cake topper') ||
+        tags.includes('topper') ||
+        title.includes('topper');
+
+      const isAccessories =
+        cat === 'cake accessories' ||
+        cat === 'cake accessory' ||
+        cat.includes('accessor') ||
+        subCat.includes('accessor') ||
+        cat.includes('candle') ||
+        subCat.includes('candle') ||
+        tags.includes('candle') ||
+        tags.includes('cake accessories') ||
+        title.includes('candle') ||
+        title.includes('sparkle') ||
+        title.includes('knife');
+
+      const isPartySpecials =
+        cat === 'party specials' ||
+        cat === 'party special' ||
+        cat.includes('party') ||
+        subCat.includes('party') ||
+        subCat.includes('popper') ||
+        tags.includes('party specials') ||
+        tags.includes('party') ||
+        title.includes('popper') ||
+        title.includes('balloon') ||
+        title.includes('snow');
+
+      const isGift =
+        cat === 'gift' ||
+        cat === 'gifts' ||
+        subCat === 'gift' ||
+        subCat === 'gifts' ||
+        tags.includes('gift') ||
+        tags.includes('gifts') ||
+        (cat.includes('gift') && !cat.includes('hamper'));
+
+      return isTopper || isAccessories || isPartySpecials || isGift;
+    });
+
+    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=600');
+
+    return res.status(200).json({
+      success: true,
+      products: celebrationProducts,
+    });
+  } catch (err) {
+    console.error('Error fetching celebration products from Firestore:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch celebration products.',
       error: err.message,
     });
   }
