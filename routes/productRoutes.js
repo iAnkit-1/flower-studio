@@ -3,6 +3,7 @@ import express from 'express';
 import {
   createProduct,
   getAllProducts,
+  getGreetingCards,
   updateProduct,
   deleteProduct,
   getR2UploadPresignedUrl,
@@ -22,6 +23,9 @@ router.post('/upload-signature', getR2UploadPresignedUrl);
 
 // R2 Direct backend upload fallback
 router.post('/upload-direct', uploadDirectToR2);
+
+// Greeting cards dedicated endpoint
+router.get('/greeting-cards', getGreetingCards);
 
 // Product CRUD
 router.post('/', createProduct);
