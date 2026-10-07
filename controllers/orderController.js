@@ -1724,15 +1724,31 @@ export const getCustomOrders = async (req, res) => {
 
     const mapped = snapshot.docs.map(doc => {
       const data = doc.data();
+      let refImages = [];
+      if (Array.isArray(data.referenceImages)) {
+        refImages = data.referenceImages.map(img => normalizeImageUrl(img, req));
+      } else if (Array.isArray(data.reference_images)) {
+        refImages = data.reference_images.map(img => normalizeImageUrl(img, req));
+      }
+      const rawRefUrl = data.referenceImageUrl || data.reference_image_url || '';
+      const refUrl = rawRefUrl ? normalizeImageUrl(rawRefUrl, req) : (refImages.length > 0 ? refImages[0] : '');
+      if (refImages.length === 0 && refUrl) {
+        refImages = [refUrl];
+      }
+
       return {
         id: data.id || doc.id,
         customerName: data.customerName || data.customer_name || '',
         customerEmail: data.customerEmail || data.customer_email || '',
+        customerPhone: data.customerPhone || data.customer_phone || data.phone || '',
         category: data.category || '',
         description: data.description || '',
-        referenceImageUrl: data.referenceImageUrl || data.reference_image_url || '',
+        referenceImageUrl: refUrl,
+        referenceImages: refImages,
         budget: parseFloat(data.budget || 0),
         requiredDate: data.requiredDate || data.required_date || '',
+        timeSlot: data.timeSlot || data.time_slot || '',
+        deliveryAddress: data.deliveryAddress || data.delivery_address || '',
         status: data.status || 'Pending Review',
         calculatedCost: data.calculatedCost !== undefined && data.calculatedCost !== null ? parseFloat(data.calculatedCost) : (data.calculated_cost !== undefined && data.calculated_cost !== null ? parseFloat(data.calculated_cost) : null),
         requestedAt: data.requestedAt || data.created_at || new Date().toISOString()
@@ -1748,22 +1764,49 @@ export const getCustomOrders = async (req, res) => {
 
 // Create custom order request
 export const createCustomOrder = async (req, res) => {
-  const { customerName, customerEmail, category, description, referenceImageUrl, budget, requiredDate } = req.body;
-  if (!customerName || !customerEmail || !category || !description || !budget || !requiredDate) {
+  const {
+    customerName,
+    customerEmail,
+    customerPhone,
+    phone,
+    category,
+    description,
+    referenceImageUrl,
+    referenceImages,
+    budget,
+    requiredDate,
+    timeSlot,
+    deliveryAddress,
+  } = req.body;
+
+  if (!description || !budget || !requiredDate) {
     return res.status(400).json({ success: false, message: 'Missing required custom order parameters.' });
   }
 
   const id = 'CUST-' + Math.floor(1000 + Math.random() * 9000);
 
+  let refImagesList = [];
+  if (Array.isArray(referenceImages)) {
+    refImagesList = referenceImages.map(img => normalizeImageUrl(img, req));
+  } else if (typeof referenceImageUrl === 'string' && referenceImageUrl.trim().isNotEmpty) {
+    refImagesList = referenceImageUrl.split(',').map(u => normalizeImageUrl(u.trim(), req)).filter(u => u.length > 0);
+  }
+
+  const primaryRefUrl = refImagesList.length > 0 ? refImagesList[0] : (referenceImageUrl ? normalizeImageUrl(referenceImageUrl, req) : '');
+
   const customOrderDoc = {
     id,
-    customerName,
-    customerEmail,
-    category,
+    customerName: customerName || 'Customer',
+    customerEmail: customerEmail || '',
+    customerPhone: customerPhone || phone || '',
+    category: category || 'Custom Floral Arrangement',
     description,
-    referenceImageUrl: referenceImageUrl || '',
+    referenceImageUrl: primaryRefUrl,
+    referenceImages: refImagesList,
     budget: parseFloat(budget),
     requiredDate: new Date(requiredDate).toISOString(),
+    timeSlot: timeSlot || '',
+    deliveryAddress: deliveryAddress || '',
     status: 'Pending Review',
     calculatedCost: null,
     requestedAt: new Date().toISOString()

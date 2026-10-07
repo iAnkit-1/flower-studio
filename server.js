@@ -14,6 +14,7 @@ import deliveryChargesRoutes   from './routes/deliveryChargesRoutes.js';
 import accountDeletionRoutes   from './routes/accountDeletionRoutes.js';
 import couponRoutes            from './routes/couponRoutes.js';
 import reminderRoutes          from './routes/reminderRoutes.js';
+import favoriteRoutes          from './routes/favoriteRoutes.js';
 import { seedDeliveryCharges } from './controllers/deliveryChargesController.js';
 import { seedCouponCodes }     from './controllers/couponController.js';
 
@@ -83,6 +84,7 @@ app.use('/api/coupons',                  couponRoutes);
 app.use('/api/coupon-codes',             couponRoutes);
 app.use('/coupons',                      couponRoutes);
 app.use('/api/reminders',                reminderRoutes);
+app.use('/api/favorites',                favoriteRoutes);
 app.use('/api/account-deletion-request',  accountDeletionRoutes);
 app.use('/api/account-deletion-requests', accountDeletionRoutes);
 app.use('/api/account',                  accountDeletionRoutes);

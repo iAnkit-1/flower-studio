@@ -30,7 +30,8 @@ export const normalizeImageUrl = (url, req) => {
   const filename = extractImageFileName(url);
   if (!filename) return url;
 
-  const folder = R2_FOLDER || 'product-images';
+  const isCustomOrder = url.includes('custom-orders') || url.includes('custom_orders') || filename.startsWith('order_');
+  const folder = isCustomOrder ? 'custom-orders' : (R2_FOLDER || 'product-images');
 
   const cdnBase = (R2_PUBLIC_URL && !R2_PUBLIC_URL.includes('.r2.cloudflarestorage.com'))
     ? R2_PUBLIC_URL
@@ -40,7 +41,12 @@ export const normalizeImageUrl = (url, req) => {
 };
 
 export const getPublicImageUrl = (key, req) => {
-  return normalizeImageUrl(key, req);
+  if (!key) return '';
+  const cdnBase = (R2_PUBLIC_URL && !R2_PUBLIC_URL.includes('.r2.cloudflarestorage.com'))
+    ? R2_PUBLIC_URL
+    : 'https://cdn.flowerstudiobypushpraj.com';
+  const cleanKey = key.replace(/^\/+/, '');
+  return `${cdnBase}/${cleanKey}`;
 };
 
 export const normalizeStringArray = (input) => {
@@ -113,8 +119,12 @@ export const serveR2Image = async (req, res) => {
     }
 
     key = key.replace(/^\/+/, '');
-    if (!key.startsWith(R2_FOLDER)) {
-      key = `${R2_FOLDER}/${key}`;
+    if (!key.startsWith('product-images') && !key.startsWith('custom-orders') && !key.startsWith(R2_FOLDER)) {
+      if (key.includes('order_') || key.includes('custom')) {
+        key = `custom-orders/${key}`;
+      } else {
+        key = `${R2_FOLDER || 'product-images'}/${key}`;
+      }
     }
 
     const command = new GetObjectCommand({
@@ -158,7 +168,7 @@ export const serveR2Image = async (req, res) => {
 
 export const getR2UploadPresignedUrl = async (req, res) => {
   try {
-    const { fileName, contentType } = req.body || {};
+    const { fileName, contentType, folder } = req.body || {};
 
     const cleanExt = fileName && fileName.includes('.')
       ? fileName.split('.').pop().toLowerCase()
@@ -167,7 +177,11 @@ export const getR2UploadPresignedUrl = async (req, res) => {
     const safeContentType = contentType || `image/${cleanExt === 'jpg' ? 'jpeg' : cleanExt}`;
     const timestamp = Date.now();
     const randomSuffix = Math.random().toString(36).substring(2, 8);
-    const key = `${R2_FOLDER}/prod_${timestamp}_${randomSuffix}.${cleanExt}`;
+    const targetFolder = (folder === 'custom-orders' || folder === 'custom_orders')
+      ? 'custom-orders'
+      : (R2_FOLDER || 'product-images');
+    const prefix = targetFolder === 'custom-orders' ? 'order' : 'prod';
+    const key = `${targetFolder}/${prefix}_${timestamp}_${randomSuffix}.${cleanExt}`;
 
     const command = new PutObjectCommand({
       Bucket: BUCKET_NAME,
@@ -204,7 +218,7 @@ export const getR2UploadPresignedUrl = async (req, res) => {
 
 export const uploadDirectToR2 = async (req, res) => {
   try {
-    const { base64, fileName, contentType } = req.body || {};
+    const { base64, fileName, contentType, folder } = req.body || {};
     if (!base64) {
       return res.status(400).json({ success: false, message: 'Missing base64 image data.' });
     }
@@ -219,7 +233,11 @@ export const uploadDirectToR2 = async (req, res) => {
     const safeContentType = contentType || `image/${cleanExt === 'jpg' ? 'jpeg' : cleanExt}`;
     const timestamp = Date.now();
     const randomSuffix = Math.random().toString(36).substring(2, 8);
-    const key = `${R2_FOLDER}/prod_${timestamp}_${randomSuffix}.${cleanExt}`;
+    const targetFolder = (folder === 'custom-orders' || folder === 'custom_orders')
+      ? 'custom-orders'
+      : (R2_FOLDER || 'product-images');
+    const prefix = targetFolder === 'custom-orders' ? 'order' : 'prod';
+    const key = `${targetFolder}/${prefix}_${timestamp}_${randomSuffix}.${cleanExt}`;
 
     await r2Client.send(new PutObjectCommand({
       Bucket: BUCKET_NAME,
