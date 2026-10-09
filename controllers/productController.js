@@ -27,6 +27,9 @@ export const normalizeImageUrl = (url, req) => {
     }
   }
 
+  const filename = extractImageFileName(url);
+  if (!filename) return '';
+
   const isSub = url.includes('subscription-plans') || url.includes('subscription_plans') || filename.startsWith('sub_');
   const isCustomOrder = url.includes('custom-orders') || url.includes('custom_orders') || filename.startsWith('order_');
   const folder = isSub ? 'subscription-plans' : (isCustomOrder ? 'custom-orders' : (R2_FOLDER || 'product-images'));
