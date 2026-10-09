@@ -1,7 +1,7 @@
 import db from '../config/db.js';
 import crypto from 'crypto';
 import { normalizeImageUrl } from './productController.js';
-import { getRazorpayClient } from '../config/razorpay.js';
+import { getRazorpayClient, createRazorpayOrder } from '../config/razorpay.js';
 
 
 /**
@@ -129,10 +129,9 @@ export const createOrder = async (req, res) => {
     let razorpayOrderId = null;
     let amountInPaise = Math.round(finalGrandTotal * 100);
 
-    const razorpay = getRazorpayClient();
-    if (!isCod && razorpay) {
+    if (!isCod) {
       try {
-        const razorpayOrder = await razorpay.orders.create({
+        const razorpayOrder = await createRazorpayOrder({
           amount: amountInPaise,
           currency: 'INR',
           receipt: `rcpt_${orderId.replace(/[^a-zA-Z0-9]/g, '_').slice(-30)}`,
@@ -145,7 +144,11 @@ export const createOrder = async (req, res) => {
         razorpayOrderId = razorpayOrder.id;
         console.log(`[Razorpay Order Created] Order ID: ${orderId} -> Razorpay Order ID: ${razorpayOrderId}`);
       } catch (rpErr) {
-        console.error('Error creating Razorpay Order via SDK:', rpErr);
+        console.error('Error creating Razorpay Order:', rpErr);
+        return res.status(500).json({
+          success: false,
+          message: `Failed to initialize online payment gateway: ${rpErr.message}`,
+        });
       }
     }
 

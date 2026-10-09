@@ -1,7 +1,7 @@
 import db from '../config/db.js';
 import crypto from 'crypto';
 import { normalizeImageUrl } from './productController.js';
-import { getRazorpayClient } from '../config/razorpay.js';
+import { getRazorpayClient, createRazorpayOrder } from '../config/razorpay.js';
 
 
 /**
@@ -313,26 +313,27 @@ export const createCustomerSubscriptionOrder = async (req, res) => {
 
     let razorpayOrderId = null;
 
-    const razorpay = getRazorpayClient();
-    if (razorpay) {
-      try {
-        const razorpayOrder = await razorpay.orders.create({
-          amount: amountInPaise,
-          currency: 'INR',
-          receipt: `rcpt_${subId.replace(/[^a-zA-Z0-9]/g, '_').slice(-30)}`,
-          notes: {
-            subscriptionId: subId,
-            planId: planId || '',
-            planTitle: planTitle,
-            userId: userId || '',
-            customerPhone: customerPhone,
-          },
-        });
-        razorpayOrderId = razorpayOrder.id;
-        console.log(`[Subscription Razorpay Order Created] ID: ${subId} -> Razorpay Order: ${razorpayOrderId}`);
-      } catch (rzpErr) {
-        console.error('Razorpay order creation failed for subscription:', rzpErr);
-      }
+    try {
+      const razorpayOrder = await createRazorpayOrder({
+        amount: amountInPaise,
+        currency: 'INR',
+        receipt: `rcpt_${subId.replace(/[^a-zA-Z0-9]/g, '_').slice(-30)}`,
+        notes: {
+          subscriptionId: subId,
+          planId: planId || '',
+          planTitle: planTitle,
+          userId: userId || '',
+          customerPhone: customerPhone,
+        },
+      });
+      razorpayOrderId = razorpayOrder.id;
+      console.log(`[Subscription Razorpay Order Created] ID: ${subId} -> Razorpay Order: ${razorpayOrderId}`);
+    } catch (rzpErr) {
+      console.error('Razorpay order creation failed for subscription:', rzpErr);
+      return res.status(500).json({
+        success: false,
+        message: `Failed to initialize online subscription payment: ${rzpErr.message}`,
+      });
     }
 
     const startDateTime = new Date(startDate);
