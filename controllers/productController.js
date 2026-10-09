@@ -178,8 +178,8 @@ export const getR2UploadPresignedUrl = async (req, res) => {
     const safeContentType = contentType || `image/${cleanExt === 'jpg' ? 'jpeg' : cleanExt}`;
     const timestamp = Date.now();
     const randomSuffix = Math.random().toString(36).substring(2, 8);
-    const isSubFolder = folder === 'subscription-plans' || folder === 'subscription_plans';
-    const isCustomFolder = folder === 'custom-orders' || folder === 'custom_orders';
+    const isSubFolder = folder === 'subscription-plans' || folder === 'subscription_plans' || (typeof fileName === 'string' && fileName.startsWith('sub_'));
+    const isCustomFolder = folder === 'custom-orders' || folder === 'custom_orders' || (typeof fileName === 'string' && fileName.startsWith('order_'));
     const targetFolder = isSubFolder
       ? 'subscription-plans'
       : (isCustomFolder ? 'custom-orders' : (R2_FOLDER || 'product-images'));
@@ -236,8 +236,8 @@ export const uploadDirectToR2 = async (req, res) => {
     const safeContentType = contentType || `image/${cleanExt === 'jpg' ? 'jpeg' : cleanExt}`;
     const timestamp = Date.now();
     const randomSuffix = Math.random().toString(36).substring(2, 8);
-    const isSubFolder = folder === 'subscription-plans' || folder === 'subscription_plans';
-    const isCustomFolder = folder === 'custom-orders' || folder === 'custom_orders';
+    const isSubFolder = folder === 'subscription-plans' || folder === 'subscription_plans' || (typeof fileName === 'string' && fileName.startsWith('sub_'));
+    const isCustomFolder = folder === 'custom-orders' || folder === 'custom_orders' || (typeof fileName === 'string' && fileName.startsWith('order_'));
     const targetFolder = isSubFolder
       ? 'subscription-plans'
       : (isCustomFolder ? 'custom-orders' : (R2_FOLDER || 'product-images'));
