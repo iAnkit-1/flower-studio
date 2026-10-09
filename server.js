@@ -15,6 +15,7 @@ import accountDeletionRoutes   from './routes/accountDeletionRoutes.js';
 import couponRoutes            from './routes/couponRoutes.js';
 import reminderRoutes          from './routes/reminderRoutes.js';
 import favoriteRoutes          from './routes/favoriteRoutes.js';
+import subscriptionRoutes      from './routes/subscriptionRoutes.js';
 import { seedDeliveryCharges } from './controllers/deliveryChargesController.js';
 import { seedCouponCodes }     from './controllers/couponController.js';
 
@@ -88,6 +89,7 @@ app.use('/api/favorites',                favoriteRoutes);
 app.use('/api/account-deletion-request',  accountDeletionRoutes);
 app.use('/api/account-deletion-requests', accountDeletionRoutes);
 app.use('/api/account',                  accountDeletionRoutes);
+app.use('/api/subscriptions',            subscriptionRoutes);
 
 // Organization routes (Custom JWT)
 app.use('/api/org/auth', orgAuthRoutes);

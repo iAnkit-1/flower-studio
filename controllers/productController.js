@@ -27,11 +27,9 @@ export const normalizeImageUrl = (url, req) => {
     }
   }
 
-  const filename = extractImageFileName(url);
-  if (!filename) return url;
-
+  const isSub = url.includes('subscription-plans') || url.includes('subscription_plans') || filename.startsWith('sub_');
   const isCustomOrder = url.includes('custom-orders') || url.includes('custom_orders') || filename.startsWith('order_');
-  const folder = isCustomOrder ? 'custom-orders' : (R2_FOLDER || 'product-images');
+  const folder = isSub ? 'subscription-plans' : (isCustomOrder ? 'custom-orders' : (R2_FOLDER || 'product-images'));
 
   const cdnBase = (R2_PUBLIC_URL && !R2_PUBLIC_URL.includes('.r2.cloudflarestorage.com'))
     ? R2_PUBLIC_URL
@@ -176,11 +174,12 @@ export const getR2UploadPresignedUrl = async (req, res) => {
 
     const safeContentType = contentType || `image/${cleanExt === 'jpg' ? 'jpeg' : cleanExt}`;
     const timestamp = Date.now();
-    const randomSuffix = Math.random().toString(36).substring(2, 8);
-    const targetFolder = (folder === 'custom-orders' || folder === 'custom_orders')
-      ? 'custom-orders'
-      : (R2_FOLDER || 'product-images');
-    const prefix = targetFolder === 'custom-orders' ? 'order' : 'prod';
+    const isSubFolder = folder === 'subscription-plans' || folder === 'subscription_plans';
+    const isCustomFolder = folder === 'custom-orders' || folder === 'custom_orders';
+    const targetFolder = isSubFolder
+      ? 'subscription-plans'
+      : (isCustomFolder ? 'custom-orders' : (R2_FOLDER || 'product-images'));
+    const prefix = isSubFolder ? 'sub' : (isCustomFolder ? 'order' : 'prod');
     const key = `${targetFolder}/${prefix}_${timestamp}_${randomSuffix}.${cleanExt}`;
 
     const command = new PutObjectCommand({
@@ -233,10 +232,12 @@ export const uploadDirectToR2 = async (req, res) => {
     const safeContentType = contentType || `image/${cleanExt === 'jpg' ? 'jpeg' : cleanExt}`;
     const timestamp = Date.now();
     const randomSuffix = Math.random().toString(36).substring(2, 8);
-    const targetFolder = (folder === 'custom-orders' || folder === 'custom_orders')
-      ? 'custom-orders'
-      : (R2_FOLDER || 'product-images');
-    const prefix = targetFolder === 'custom-orders' ? 'order' : 'prod';
+    const isSubFolder = folder === 'subscription-plans' || folder === 'subscription_plans';
+    const isCustomFolder = folder === 'custom-orders' || folder === 'custom_orders';
+    const targetFolder = isSubFolder
+      ? 'subscription-plans'
+      : (isCustomFolder ? 'custom-orders' : (R2_FOLDER || 'product-images'));
+    const prefix = isSubFolder ? 'sub' : (isCustomFolder ? 'order' : 'prod');
     const key = `${targetFolder}/${prefix}_${timestamp}_${randomSuffix}.${cleanExt}`;
 
     await r2Client.send(new PutObjectCommand({
