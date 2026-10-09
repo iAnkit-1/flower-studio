@@ -3,20 +3,25 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-let razorpay = null;
+export function getRazorpayClient() {
+  const keyId = process.env.RAZORPAY_KEY_ID || 'rzp_live_TlTZMHvnMnXHGZ';
+  const keySecret = process.env.RAZORPAY_KEY_SECRET || '37HQJoRCjVLSG8uf4FzaR3pQ';
 
-if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
-  try {
-    razorpay = new Razorpay({
-      key_id: process.env.RAZORPAY_KEY_ID,
-      key_secret: process.env.RAZORPAY_KEY_SECRET,
-    });
-    console.log('Razorpay SDK client initialized successfully.');
-  } catch (err) {
-    console.error('Failed to initialize Razorpay SDK:', err);
+  if (!keyId || !keySecret) {
+    console.warn('[Razorpay] Keys missing in environment variables.');
+    return null;
   }
-} else {
-  console.warn('Razorpay keys missing in environment variables.');
+
+  try {
+    return new Razorpay({
+      key_id: keyId,
+      key_secret: keySecret,
+    });
+  } catch (err) {
+    console.error('[Razorpay] Failed to initialize SDK client:', err);
+    return null;
+  }
 }
 
+const razorpay = getRazorpayClient();
 export default razorpay;

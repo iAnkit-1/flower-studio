@@ -1,23 +1,8 @@
 import db from '../config/db.js';
-import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import { normalizeImageUrl } from './productController.js';
+import { getRazorpayClient } from '../config/razorpay.js';
 
-// Initialize Razorpay client only if keys are present
-let razorpay = null;
-if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
-  try {
-    razorpay = new Razorpay({
-      key_id: process.env.RAZORPAY_KEY_ID,
-      key_secret: process.env.RAZORPAY_KEY_SECRET,
-    });
-    console.log('Razorpay SDK initialized successfully with credentials.');
-  } catch (err) {
-    console.error('Failed to initialize Razorpay SDK:', err);
-  }
-} else {
-  console.warn('Razorpay keys not configured. Operating in simulation mode.');
-}
 
 /**
  * Create Order (Server-Side Price Validation & Razorpay Order Creation)
@@ -144,12 +129,13 @@ export const createOrder = async (req, res) => {
     let razorpayOrderId = null;
     let amountInPaise = Math.round(finalGrandTotal * 100);
 
+    const razorpay = getRazorpayClient();
     if (!isCod && razorpay) {
       try {
         const razorpayOrder = await razorpay.orders.create({
           amount: amountInPaise,
           currency: 'INR',
-          receipt: `rcpt_${orderId.replace(/-/g, '_')}`,
+          receipt: `rcpt_${orderId.replace(/[^a-zA-Z0-9]/g, '_').slice(-30)}`,
           notes: {
             orderId: orderId,
             userId: req.body.userId || req.body.user_id || '',
@@ -235,7 +221,7 @@ export const createOrder = async (req, res) => {
       razorpayOrderId: razorpayOrderId || `order_sim_${Date.now()}`,
       amount: amountInPaise,
       currency: 'INR',
-      keyId: process.env.RAZORPAY_KEY_ID || 'rzp_test_TACOfiOWpIflBg',
+      keyId: process.env.RAZORPAY_KEY_ID || 'rzp_live_TlTZMHvnMnXHGZ',
       grandTotal: finalGrandTotal,
       isSimulated: !razorpayOrderId,
     });
@@ -317,8 +303,9 @@ export const verifyPayment = async (req, res) => {
     // Verify Real Razorpay Signature using HMAC SHA-256
     const rzpOrderId = razorpay_order_id || order.razorpayOrderId || order.razorpay_order_id;
     const dataToVerify = rzpOrderId + '|' + razorpay_payment_id;
+    const keySecret = process.env.RAZORPAY_KEY_SECRET || '37HQJoRCjVLSG8uf4FzaR3pQ';
     const generatedSignature = crypto
-      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .createHmac('sha256', keySecret)
       .update(dataToVerify.toString())
       .digest('hex');
 

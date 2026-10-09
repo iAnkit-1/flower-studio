@@ -10,3 +10,6 @@ R2_FOLDER = "product-images"
 R2_PUBLIC_URL = "https://98402096d741cf32c4ce0d16403a7f34.r2.cloudflarestorage.com/flower-studio"
 R2_BUCKET_NAME = "flower-studio"
 JWT_EXPIRES_IN = "7d"
+RAZORPAY_KEY_ID = "rzp_live_TlTZMHvnMnXHGZ"
+RAZORPAY_KEY_SECRET = "37HQJoRCjVLSG8uf4FzaR3pQ"
+
