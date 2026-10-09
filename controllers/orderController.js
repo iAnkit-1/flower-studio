@@ -197,11 +197,11 @@ export const createOrder = async (req, res) => {
       updatedAt: new Date().toISOString(),
     };
 
-    // Save order in Firestore
-    const orderDocRef = db.collection('orders').doc(orderId);
-    await orderDocRef.set(orderDocument);
-
     if (isCod) {
+      // Save COD order directly to main orders collection
+      const orderDocRef = db.collection('orders').doc(orderId);
+      await orderDocRef.set(orderDocument);
+
       // Deduct stock immediately for COD orders since order is PLACED
       await _deductOrderStock(orderDocRef, validatedItems, { stockDeducted: false });
       console.log(`COD Order Placed Successfully: ${orderId}`);
@@ -212,6 +212,12 @@ export const createOrder = async (req, res) => {
         paymentMethod: 'cod',
         grandTotal: finalGrandTotal,
       });
+    }
+
+    // For Online Razorpay orders: Store ONLY in 'pending_orders' draft collection
+    // Do NOT pollute main 'orders' collection until payment is confirmed
+    if (db) {
+      await db.collection('pending_orders').doc(orderId).set(orderDocument);
     }
 
     return res.status(201).json({
@@ -251,97 +257,98 @@ export const verifyPayment = async (req, res) => {
   }
 
   try {
-    const docRef = db.collection('orders').doc(orderId);
-    const docSnap = await docRef.get();
+    // 1. Check if already confirmed in main orders collection (Idempotency)
+    const confirmedDocRef = db.collection('orders').doc(orderId);
+    const confirmedDocSnap = await confirmedDocRef.get();
 
-    if (!docSnap.exists) {
-      return res.status(404).json({ success: false, message: 'Order not found in database.' });
+    if (confirmedDocSnap.exists) {
+      const existingOrder = confirmedDocSnap.data();
+      if (existingOrder.paymentStatus === 'PAID' || existingOrder.payment_status === 'paid') {
+        console.log(`Order ${orderId} already verified and marked as PAID.`);
+        return res.status(200).json({
+          success: true,
+          message: 'Payment already verified.',
+          orderId: orderId,
+        });
+      }
     }
 
-    const order = docSnap.data();
+    // 2. Look up pending order draft from 'pending_orders' (or fallback to 'orders')
+    let order = null;
+    let pendingDocRef = db.collection('pending_orders').doc(orderId);
+    let pendingSnap = await pendingDocRef.get();
 
-    // Idempotency check: If already marked PAID, return success immediately
-    if (order.paymentStatus === 'PAID' || order.payment_status === 'paid') {
-      console.log(`Order ${orderId} already verified and marked as PAID.`);
-      return res.status(200).json({
-        success: true,
-        message: 'Payment already verified.',
-        orderId: orderId,
-      });
+    if (pendingSnap.exists) {
+      order = pendingSnap.data();
+    } else if (confirmedDocSnap.exists) {
+      order = confirmedDocSnap.data();
     }
 
-    // Simulated verification or fallback mode
-    if (isSimulated || !process.env.RAZORPAY_KEY_SECRET || razorpay_signature === 'simulated_signature_ok') {
-      const finalPaymentId = razorpay_payment_id || `pay_sim_${Math.random().toString(36).substr(2, 9)}`;
-      const pMethod = paymentMethod || order.paymentMethod || 'ONLINE';
-
-      await docRef.update({
-        paymentStatus: 'PAID',
-        payment_status: 'paid',
-        orderStatus: 'CONFIRMED',
-        status: 'CONFIRMED',
-        razorpayPaymentId: finalPaymentId,
-        razorpay_payment_id: finalPaymentId,
-        razorpay_signature: razorpay_signature || 'simulated_sig',
-        delivery_status: 'handcrafting',
-        paymentMethod: pMethod,
-        payment_method: pMethod,
-        updatedAt: new Date().toISOString()
-      });
-
-      // Deduct stock for confirmed order
-      await _deductOrderStock(docRef, order.items, order);
-
-      console.log(`Order ${orderId} verified successfully (simulated/fallback mode)`);
-      return res.status(200).json({
-        success: true,
-        message: 'Payment verified successfully (Simulated mode).',
-        orderId: orderId
-      });
+    if (!order) {
+      return res.status(404).json({ success: false, message: 'Order draft not found in database.' });
     }
 
-    // Verify Real Razorpay Signature using HMAC SHA-256
-    const rzpOrderId = razorpay_order_id || order.razorpayOrderId || order.razorpay_order_id;
-    const dataToVerify = rzpOrderId + '|' + razorpay_payment_id;
+    // 3. Verify Signature
+    let isSigValid = false;
     const keySecret = process.env.RAZORPAY_KEY_SECRET || '37HQJoRCjVLSG8uf4FzaR3pQ';
-    const generatedSignature = crypto
-      .createHmac('sha256', keySecret)
-      .update(dataToVerify.toString())
-      .digest('hex');
+    const rzpOrderId = razorpay_order_id || order.razorpayOrderId || order.razorpay_order_id;
 
-    if (generatedSignature === razorpay_signature) {
-      await docRef.update({
-        paymentStatus: 'PAID',
-        payment_status: 'paid',
-        orderStatus: 'CONFIRMED',
-        status: 'CONFIRMED',
-        razorpayPaymentId: razorpay_payment_id,
-        razorpay_payment_id: razorpay_payment_id,
-        razorpay_signature: razorpay_signature,
-        delivery_status: 'handcrafting',
-        updatedAt: new Date().toISOString()
-      });
+    if (isSimulated || razorpay_signature === 'simulated_signature_ok') {
+      isSigValid = true;
+    } else if (rzpOrderId && razorpay_payment_id && razorpay_signature) {
+      const dataToVerify = `${rzpOrderId}|${razorpay_payment_id}`;
+      const generatedSignature = crypto
+        .createHmac('sha256', keySecret)
+        .update(dataToVerify.toString())
+        .digest('hex');
 
-      // Deduct stock for confirmed order
-      await _deductOrderStock(docRef, order.items, order);
+      isSigValid = (generatedSignature === razorpay_signature);
+    }
 
-      console.log(`Order ${orderId} verified successfully via HMAC SHA-256 Signature!`);
-      return res.status(200).json({
-        success: true,
-        message: 'Payment signature verified successfully.',
-        orderId: orderId
-      });
-    } else {
-      await docRef.update({
-        paymentStatus: 'FAILED',
-        payment_status: 'failed',
-        orderStatus: 'PAYMENT_FAILED',
-        status: 'PAYMENT_FAILED',
-        updatedAt: new Date().toISOString()
-      });
+    if (!isSigValid) {
       console.error(`Invalid Razorpay signature for order ${orderId}`);
       return res.status(400).json({ success: false, message: 'Invalid payment signature.' });
     }
+
+    // 4. On Valid Signature: Write confirmed order to 'orders' collection
+    const finalPaymentId = razorpay_payment_id || `pay_verified_${Date.now()}`;
+    const pMethod = paymentMethod || order.paymentMethod || 'ONLINE_RAZORPAY';
+
+    const confirmedOrder = {
+      ...order,
+      paymentStatus: 'PAID',
+      payment_status: 'paid',
+      orderStatus: 'CONFIRMED',
+      status: 'CONFIRMED',
+      razorpayPaymentId: finalPaymentId,
+      razorpay_payment_id: finalPaymentId,
+      razorpayOrderId: rzpOrderId || order.razorpayOrderId,
+      razorpay_order_id: rzpOrderId || order.razorpayOrderId,
+      razorpay_signature: razorpay_signature || '',
+      delivery_status: 'handcrafting',
+      paymentMethod: pMethod,
+      payment_method: pMethod,
+      updatedAt: new Date().toISOString()
+    };
+
+    await confirmedDocRef.set(confirmedOrder);
+
+    // Deduct stock for confirmed order
+    await _deductOrderStock(confirmedDocRef, confirmedOrder.items, confirmedOrder);
+
+    // Clean up draft from pending_orders
+    try {
+      if (pendingSnap.exists) {
+        await pendingDocRef.delete();
+      }
+    } catch (_) {}
+
+    console.log(`Order ${orderId} verified and successfully stored in orders collection!`);
+    return res.status(200).json({
+      success: true,
+      message: 'Payment verified successfully and order confirmed.',
+      orderId: orderId
+    });
 
   } catch (error) {
     console.error('Error verifying payment in Firestore:', error);
@@ -1563,11 +1570,26 @@ export const getAllOrders = async (req, res) => {
       };
     });
 
-    mapped.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+    const filteredOrders = mapped.filter((order) => {
+      const pm = (order.paymentMethod || '').toLowerCase();
+      const ps = (order.paymentStatus || '').toUpperCase();
+      const os = (order.orderStatus || '').toUpperCase();
+
+      // Cash On Delivery orders are always valid placed orders
+      if (pm === 'cod') return true;
+
+      // For online orders, omit abandoned/pending drafts
+      if (ps === 'PENDING' || ps === 'PAYMENT_PENDING' || os === 'PAYMENT_PENDING') {
+        return false;
+      }
+      return true;
+    });
+
+    filteredOrders.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 
     return res.status(200).json({
       success: true,
-      orders: mapped
+      orders: filteredOrders
     });
   } catch (err) {
     console.error('Error fetching all orders for admin from Firestore:', err);

@@ -370,7 +370,8 @@ export const createCustomerSubscriptionOrder = async (req, res) => {
     };
 
     if (db) {
-      await db.collection('subscriptions').doc(subId).set(subscriptionDoc);
+      // Store in temporary draft collection until Razorpay payment signature is verified
+      await db.collection('pending_subscriptions').doc(subId).set(subscriptionDoc);
     }
 
     return res.status(201).json({
@@ -412,15 +413,43 @@ export const verifyCustomerSubscriptionPayment = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Missing subscriptionId parameter.' });
     }
 
+    // 1. Check if already confirmed in main subscriptions collection (Idempotency)
+    const confirmedDocRef = db.collection('subscriptions').doc(subId);
+    const confirmedDocSnap = await confirmedDocRef.get();
+
+    let subData = null;
+    const pendingDocRef = db.collection('pending_subscriptions').doc(subId);
+    const pendingSnap = await pendingDocRef.get();
+
+    if (confirmedDocSnap.exists) {
+      const existing = confirmedDocSnap.data();
+      if (existing.paymentStatus === 'PAID' || existing.status === 'ACTIVE') {
+        console.log(`Subscription ${subId} already verified and marked as PAID.`);
+        return res.status(200).json({
+          success: true,
+          message: 'Subscription already verified and active.',
+          subscription: existing,
+        });
+      }
+      subData = existing;
+    } else if (pendingSnap.exists) {
+      subData = pendingSnap.data();
+    }
+
+    if (!subData) {
+      return res.status(404).json({ success: false, message: 'Subscription draft not found.' });
+    }
+
     let isValid = false;
     const keySecret = process.env.RAZORPAY_KEY_SECRET || '37HQJoRCjVLSG8uf4FzaR3pQ';
+    const rzpOrderId = razorpay_order_id || subData.razorpayOrderId;
 
     if (isSimulated || razorpay_signature === 'simulated_signature_ok') {
       isValid = true;
-    } else if (razorpay_order_id && razorpay_payment_id && razorpay_signature) {
+    } else if (rzpOrderId && razorpay_payment_id && razorpay_signature) {
       const generatedSignature = crypto
         .createHmac('sha256', keySecret)
-        .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+        .update(`${rzpOrderId}|${razorpay_payment_id}`)
         .digest('hex');
 
       isValid = generatedSignature === razorpay_signature;
@@ -433,25 +462,25 @@ export const verifyCustomerSubscriptionPayment = async (req, res) => {
       });
     }
 
-    const docRef = db.collection('subscriptions').doc(subId);
-    const docSnap = await docRef.get();
-
-    if (!docSnap.exists) {
-      return res.status(404).json({ success: false, message: 'Subscription record not found.' });
-    }
-
-    const subData = docSnap.data();
-
     const updates = {
+      ...subData,
       paymentStatus: 'PAID',
       status: 'ACTIVE',
       razorpayPaymentId: razorpay_payment_id || `pay_sim_${Date.now()}`,
-      razorpayOrderId: razorpay_order_id || subData.razorpayOrderId,
+      razorpayOrderId: rzpOrderId || subData.razorpayOrderId,
       updatedAt: new Date().toISOString(),
     };
 
-    await docRef.update(updates);
+    // Save strictly to 'subscriptions' collection upon valid payment
+    await confirmedDocRef.set(updates);
     console.log(`[Subscription Activated] ID: ${subId}, Payment: PAID`);
+
+    // Clean up draft from pending_subscriptions
+    try {
+      if (pendingSnap.exists) {
+        await pendingDocRef.delete();
+      }
+    } catch (_) {}
 
     // Record in orders collection so it seamlessly displays in user's "My Orders"
     try {
@@ -459,12 +488,16 @@ export const verifyCustomerSubscriptionPayment = async (req, res) => {
         id: subId,
         orderId: subId,
         userId: subData.userId || '',
+        userPhone: subData.customerPhone || '',
         recipientName: subData.customerName || 'Valued Customer',
         recipientPhone: subData.customerPhone || '',
         deliveryAddress: subData.deliveryAddress || '',
         status: 'CONFIRMED',
+        orderStatus: 'CONFIRMED',
         paymentStatus: 'PAID',
+        payment_status: 'paid',
         paymentMethod: 'Razorpay (Daily Subscription)',
+        payment_method: 'Razorpay (Daily Subscription)',
         delivery_status: 'Active Subscription',
         items: [
           {
@@ -481,6 +514,7 @@ export const verifyCustomerSubscriptionPayment = async (req, res) => {
         itemsSubtotal: subData.price || 0,
         grandTotal: subData.price || 0,
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       };
 
       await db.collection('orders').doc(subId).set(generalOrderDoc);
@@ -527,14 +561,16 @@ export const getMySubscriptions = async (req, res) => {
       return res.status(200).json({ success: true, subscriptions: [] });
     }
 
-    const subscriptions = snapshot.docs.map((doc) => {
-      const data = doc.data();
-      return {
-        id: doc.id,
-        ...data,
-        thumbnailUrl: normalizeImageUrl(data.thumbnailUrl, req),
-      };
-    });
+    const subscriptions = snapshot.docs
+      .map((doc) => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          thumbnailUrl: normalizeImageUrl(data.thumbnailUrl, req),
+        };
+      })
+      .filter((s) => s.paymentStatus === 'PAID' || s.status === 'ACTIVE' || s.paymentMethod === 'cod');
 
     return res.status(200).json({ success: true, subscriptions });
   } catch (err) {
