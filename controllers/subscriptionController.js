@@ -259,9 +259,13 @@ export const createCustomerSubscriptionOrder = async (req, res) => {
       planId,
       customerName,
       customerPhone,
+      customerEmail,
       deliveryAddress,
       startDate,
       timeSlot,
+      deliverySlot,
+      preferredVariety,
+      flowerVariety,
       userId,
       specialInstructions,
     } = req.body;
@@ -272,6 +276,9 @@ export const createCustomerSubscriptionOrder = async (req, res) => {
         message: 'Phone number, delivery address, and start date are required.',
       });
     }
+
+    const selectedVariety = preferredVariety || flowerVariety || '';
+    const selectedSlot = deliverySlot || timeSlot || 'Morning (6:00 AM – 8:00 AM Puja)';
 
     let planTitle = 'Daily Flower Subscription';
     let planDuration = '30 Days';
@@ -344,10 +351,14 @@ export const createCustomerSubscriptionOrder = async (req, res) => {
       thumbnailUrl: normalizeImageUrl(planThumb, req),
       customerName: customerName || 'Valued Customer',
       customerPhone,
+      customerEmail: customerEmail || '',
       deliveryAddress,
       startDate: startDateTime.toISOString(),
       endDate: endDateTime.toISOString(),
-      timeSlot: timeSlot || 'Morning (6:00 AM – 8:00 AM Puja)',
+      timeSlot: selectedSlot,
+      deliveryTimeSlot: selectedSlot,
+      flowerVariety: selectedVariety,
+      preferredVariety: selectedVariety,
       specialInstructions: specialInstructions || '',
       userId: userId || null,
       paymentMethod: 'razorpay', // STRICTLY ONLINE PAYMENT
