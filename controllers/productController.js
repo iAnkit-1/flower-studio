@@ -177,6 +177,7 @@ export const getR2UploadPresignedUrl = async (req, res) => {
 
     const safeContentType = contentType || `image/${cleanExt === 'jpg' ? 'jpeg' : cleanExt}`;
     const timestamp = Date.now();
+    const randomSuffix = Math.random().toString(36).substring(2, 8);
     const isSubFolder = folder === 'subscription-plans' || folder === 'subscription_plans';
     const isCustomFolder = folder === 'custom-orders' || folder === 'custom_orders';
     const targetFolder = isSubFolder
