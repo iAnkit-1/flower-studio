@@ -30,19 +30,42 @@ const allowedOrigins = [
   'https://www.flowerstudiobypushpraj.com',
   'https://flowerstudiobypushpraj.com',
   'https://flowerstudio.vercel.app',
+  'https://org-web.flower-studio.workers.dev',
   'http://localhost:3000',
   'http://localhost:5173',
+  'http://localhost:5174',
   'http://localhost:8080',
   'http://localhost:5000',
 ];
 
+// Helper to determine if an origin is permitted by CORS
+export const isOriginAllowed = (origin) => {
+  // Allow non-browser clients (Mobile Apps / Flutter APKs, Postman, Server-to-server Webhooks)
+  if (!origin) return true;
+
+  // Direct match in allowlist
+  if (allowedOrigins.includes(origin)) return true;
+
+  // Allow subdomains of flowerstudiobypushpraj.com
+  if (origin.endsWith('.flowerstudiobypushpraj.com')) return true;
+
+  // Allow official Cloudflare workers deployment for Org Web
+  if (origin === 'https://org-web.flower-studio.workers.dev' || origin.endsWith('.flower-studio.workers.dev')) return true;
+
+  // Allow verified Vercel production deployment
+  if (origin === 'https://flowerstudio.vercel.app') return true;
+
+  return false;
+};
+
 // CORS configuration supporting HttpOnly Cookies & Bearer Tokens across Web & APK
 const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app') || origin.endsWith('flowerstudiobypushpraj.com')) {
+    if (isOriginAllowed(origin)) {
       return callback(null, true);
     }
-    callback(null, true);
+    // Strictly reject unpermitted origins
+    return callback(new Error(`Origin '${origin}' is not allowed by CORS.`));
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Cookie', 'X-Razorpay-Signature'],
@@ -53,17 +76,38 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
-// Preflight handler: return 200 OK immediately with dynamic origin CORS headers for cookie credentials
+// Preflight & Security Headers handler: enforce allowed origin check
 app.use((req, res, next) => {
-  const origin = req.headers.origin || '*';
-  res.header('Access-Control-Allow-Origin', origin);
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Cookie, X-Razorpay-Signature');
+  const origin = req.headers.origin;
+  if (origin) {
+    if (isOriginAllowed(origin)) {
+      res.header('Access-Control-Allow-Origin', origin);
+      res.header('Access-Control-Allow-Credentials', 'true');
+      res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+      res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Cookie, X-Razorpay-Signature');
+    } else {
+      // Disallow origin: do not set Access-Control headers, and reject preflight OPTIONS
+      if (req.method === 'OPTIONS') {
+        return res.status(403).json({ success: false, message: 'Origin not allowed by CORS.' });
+      }
+    }
+  }
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
   next();
+});
+
+// CORS error handler to return clean 403 Forbidden on rejected origins
+app.use((err, req, res, next) => {
+  if (err && err.message && err.message.includes('CORS')) {
+    return res.status(403).json({
+      success: false,
+      message: err.message,
+      code: 'CORS_NOT_ALLOWED'
+    });
+  }
+  next(err);
 });
 
 app.use(cookieParser());
