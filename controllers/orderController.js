@@ -87,17 +87,15 @@ export const createOrder = async (req, res) => {
         itemTotalDiscount: itemTotalDiscount,
         imageUrl: normalizeImageUrl(item.imageUrl || item.product_image || null, req),
         cakeMessage: item.cakeMessage || null,
-        addons: item.addons || []
       });
     }
 
-    const addonsSubtotalVal = parseFloat(addons_subtotal || 0.0);
     const deliveryTotalVal = parseFloat(delivery_total || 0.0);
     const couponCode = req.body.couponCode || req.body.coupon_code || null;
     const couponDiscountVal = parseFloat(req.body.couponDiscount || req.body.coupon_discount || 0.0);
     
     // Server-calculated grand total
-    const computedGrandTotal = Math.max(0.0, validatedSubtotal + addonsSubtotalVal + deliveryTotalVal - couponDiscountVal);
+    const computedGrandTotal = Math.max(0.0, validatedSubtotal + deliveryTotalVal - couponDiscountVal);
     const finalGrandTotal = computedGrandTotal > 0 ? computedGrandTotal : parseFloat(grand_total || 0.0);
 
     const firstItem = items && items.length > 0 ? items[0] : {};
@@ -174,8 +172,6 @@ export const createOrder = async (req, res) => {
       coupon_code: couponCode,
       couponDiscount: couponDiscountVal,
       coupon_discount: couponDiscountVal,
-      addonsSubtotal: addonsSubtotalVal,
-      addons_subtotal: addonsSubtotalVal,
       deliveryCharges: deliveryTotalVal,
       delivery_total: deliveryTotalVal,
       grandTotal: finalGrandTotal,
@@ -821,7 +817,7 @@ export const getInvoice = async (req, res) => {
       }, 0) + calcDelivery;
     }
 
-    const grossPrice = calcGrand > 0 ? calcGrand : (calcSubtotal + calcAddons + calcDelivery);
+    const grossPrice = calcGrand > 0 ? calcGrand : (calcSubtotal + calcDelivery);
     const gstRate = 0.18;
     const taxableValue = grossPrice / (1 + gstRate);
     const totalGst = grossPrice - taxableValue;
@@ -892,7 +888,7 @@ export const getInvoice = async (req, res) => {
 
         if (Array.isArray(item.addons) && item.addons.length > 0) {
           for (const addon of item.addons) {
-            const addonTitle = addon.title || addon.productTitle || addon.product?.title || 'Add-on Item';
+            const addonTitle = addon.title || addon.productTitle || addon.product?.title || 'Flower Studio Product';
             const addonPrice = parseFloat(addon.price || addon.orderPrice || addon.product?.price || 0);
             const addonQty = parseInt(addon.quantity || 1, 10);
             const totalAddonPrice = addonPrice * addonQty;
@@ -900,9 +896,9 @@ export const getInvoice = async (req, res) => {
             const addonTaxable = totalAddonPrice - addonGst;
 
             tableRows += `
-              <tr class="addon-row">
-                <td></td>
-                <td class="desc">🎁 Add-on: ${addonTitle}</td>
+              <tr>
+                <td>${counter++}</td>
+                <td class="desc"><strong>${addonTitle}</strong></td>
                 <td>${getHSN(addonTitle)}</td>
                 <td>₹${addonTaxable.toFixed(2)}</td>
                 <td>${addonQty}</td>
@@ -1502,7 +1498,9 @@ export const getAllOrders = async (req, res) => {
       // Derive itemsSubtotal and totalDiscount from items array
       let calcItemsSubtotal = 0.0;
       let calcTotalDiscount = 0.0;
-      const mappedItems = items.map(it => {
+      const mappedItems = [];
+
+      items.forEach(it => {
         const img = normalizeImageUrl(it.productImage || it.imageUrl || it.product_image || '', req);
         const qty = parseInt(it.quantity || 1, 10);
         const unitListingPrice = parseFloat(it.listingPrice || 0);
@@ -1515,7 +1513,7 @@ export const getAllOrders = async (req, res) => {
         calcItemsSubtotal += itemListingPrice;
         calcTotalDiscount += itemTotalDiscount;
 
-        return {
+        mappedItems.push({
           productId: it.productId || it.product_id || '',
           productTitle: it.productTitle || it.productName || it.product_title || '',
           productName: it.productTitle || it.productName || it.product_title || '',
@@ -1532,8 +1530,47 @@ export const getAllOrders = async (req, res) => {
           itemOrderPrice: itemOrderPrice,
           itemTotalDiscount: itemTotalDiscount,
           cakeMessage: it.cakeMessage || null,
-          addons: it.addons || []
-        };
+        });
+
+        // Unpack any legacy addons directly into mappedItems as regular items
+        if (Array.isArray(it.addons) && it.addons.length > 0) {
+          it.addons.forEach(ad => {
+            const prod = (ad && typeof ad === 'object' && ad.product && typeof ad.product === 'object') ? ad.product : (ad || {});
+            const adQty = parseInt(ad.quantity || 1, 10);
+            const adPrice = parseFloat(prod.price ?? prod.salePrice ?? prod.orderPrice ?? ad.price ?? ad.orderPrice ?? 0);
+            const adListing = parseFloat(prod.listingPrice ?? prod.mrp ?? ad.listingPrice ?? ad.mrp ?? adPrice);
+            const adTitle = prod.title || prod.productTitle || prod.productName || ad.productTitle || ad.productName || 'Flower Studio Product';
+            const adRawImg = prod.imageUrl || prod.productImage || prod.image || ad.imageUrl || ad.productImage || '';
+            const adImg = normalizeImageUrl(adRawImg, req);
+            const adId = prod.id || prod.productId || ad.productId || ad.id || '';
+            const adListingPrice = adListing * adQty;
+            const adOrderPrice = adPrice * adQty;
+            const adDiscount = Math.max(0.0, adListing - adPrice);
+            const adTotalDiscount = adDiscount * adQty;
+
+            calcItemsSubtotal += adListingPrice;
+            calcTotalDiscount += adTotalDiscount;
+
+            mappedItems.push({
+              productId: adId,
+              productTitle: adTitle,
+              productName: adTitle,
+              productImage: adImg,
+              imageUrl: adImg,
+              product_image: adImg,
+              category: prod.category || 'addon',
+              quantity: adQty,
+              listingPrice: adListing,
+              orderPrice: adPrice,
+              price: adPrice,
+              discount: adDiscount,
+              itemListingPrice: adListingPrice,
+              itemOrderPrice: adOrderPrice,
+              itemTotalDiscount: adTotalDiscount,
+              cakeMessage: null,
+            });
+          });
+        }
       });
 
       // Prefer stored values, fall back to computed
@@ -1557,6 +1594,8 @@ export const getAllOrders = async (req, res) => {
         giftMessage: data.giftMessage || data.gift_message || '',
         itemsSubtotal: finalItemsSubtotal,
         totalDiscount: finalTotalDiscount,
+        couponCode: data.couponCode || data.coupon_code || null,
+        couponDiscount: parseFloat(data.couponDiscount || data.coupon_discount || 0),
         deliveryCharges: parseFloat(data.deliveryCharges || 0),
         grandTotal: parseFloat(data.grandTotal || data.grand_total || data.totalAmount || 0),
         customerEmail: data.customerEmail || (recipientName !== 'Customer' ? recipientName.toLowerCase().replace(/\s+/g, '') + '@example.com' : 'customer@example.com'),

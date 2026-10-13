@@ -529,6 +529,72 @@ export const getAllProducts = async (req, res) => {
 
 /*
 |--------------------------------------------------------------------------
+| Get Single Product By ID
+|--------------------------------------------------------------------------
+*/
+export const getProductById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ success: false, message: 'Missing product ID.' });
+    }
+
+    const doc = await db.collection('products').doc(id).get();
+    if (!doc.exists) {
+      return res.status(404).json({ success: false, message: 'Product not found.' });
+    }
+
+    const data = doc.data();
+    const normalizedImages = (data.images || []).map((img) =>
+      normalizeImageUrl(img, req)
+    );
+
+    const product = {
+      id: data.id || doc.id,
+      hsnCode: data.hsnCode || '',
+      barcode: data.barcode || '',
+      sku: data.sku || '',
+      title: data.title || '',
+      description: data.description || '',
+      mrp: parseFloat(data.mrp || 0.0),
+      salePrice: parseFloat(data.salePrice || 0.0),
+      discountPercentage: parseFloat(data.discountPercentage || 0.0),
+      ratings: parseFloat(data.ratings || 0.0),
+      reviewsCount: data.reviewsCount || 0,
+      category: data.category || '',
+      subCategory: data.subCategory || '',
+      availability: data.availability || 'available',
+      stock: parseFloat(data.stock || 0.0),
+      tags: normalizeStringArray(data.tags),
+      addons: data.addons || {},
+      occasions: normalizeStringArray(data.occasions),
+      images: normalizedImages,
+      createdAt: data.createdAt
+        ? (typeof data.createdAt.toDate === 'function'
+            ? data.createdAt.toDate().toISOString()
+            : data.createdAt)
+        : null,
+      addOns: data.addOns || [],
+      similarItems: data.similarItems || [],
+      availableCombos: normalizeAvailableCombos(data.availableCombos || data.available_combos),
+    };
+
+    return res.status(200).json({
+      success: true,
+      product,
+    });
+  } catch (err) {
+    console.error('Error fetching product record by ID:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch product.',
+      error: err.message,
+    });
+  }
+};
+
+/*
+|--------------------------------------------------------------------------
 | Get Greeting Card Products
 |--------------------------------------------------------------------------
 */
