@@ -30,7 +30,7 @@ const allowedOrigins = [
   'https://www.flowerstudiobypushpraj.com',
   'https://flowerstudiobypushpraj.com',
   'https://flowerstudio.vercel.app',
-  'https://cosmic-swan-9b4229.netlify.app',
+  'https://fswebadmin.netlify.app',
   'http://localhost:3000',
   'http://localhost:5173',
   'http://localhost:5174',
