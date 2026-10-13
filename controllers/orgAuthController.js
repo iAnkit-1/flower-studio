@@ -188,3 +188,293 @@ export const verifyOrgToken = async (req, res) => {
     });
   }
 };
+
+/**
+ * GET /api/org/staff
+ * Admin only: retrieves all staff / admin users
+ */
+export const getAllStaff = async (req, res) => {
+  try {
+    const snapshot = await db.collection(STAFF_COLLECTION).get();
+    const staffList = snapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        name: data.name || 'Staff User',
+        email: data.email || '',
+        role: data.role || 'staff',
+        isActive: data.isActive !== false,
+        createdAt: data.createdAt || null,
+        lastLoginAt: data.lastLoginAt || null,
+      };
+    });
+
+    staffList.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+
+    return res.status(200).json({
+      success: true,
+      staff: staffList
+    });
+  } catch (error) {
+    console.error('[getAllStaff] Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve staff users.',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * POST /api/org/staff
+ * Admin only: creates a new staff user
+ */
+export const createStaff = async (req, res) => {
+  const { name, email, password, role } = req.body;
+
+  if (!email || !password || !name) {
+    return res.status(400).json({
+      success: false,
+      message: 'Name, email, and password are required.'
+    });
+  }
+
+  if (password.length < 6) {
+    return res.status(400).json({
+      success: false,
+      message: 'Password must be at least 6 characters long.'
+    });
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+  const validRole = (role || 'orders').trim().toLowerCase();
+  const allowedRoles = ['admin', 'catalog', 'orders', 'delivery'];
+
+  if (!allowedRoles.includes(validRole)) {
+    return res.status(400).json({
+      success: false,
+      message: `Invalid role. Allowed roles: ${allowedRoles.join(', ')}`
+    });
+  }
+
+  try {
+    const existing = await db
+      .collection(STAFF_COLLECTION)
+      .where('email', '==', normalizedEmail)
+      .limit(1)
+      .get();
+
+    if (!existing.empty) {
+      return res.status(400).json({
+        success: false,
+        message: 'A staff member with this email already exists.'
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 12);
+    const docId = normalizedEmail.replace(/[@.]/g, '_');
+    const now = new Date().toISOString();
+
+    const staffDoc = {
+      email: normalizedEmail,
+      hashedPassword,
+      name: name.trim(),
+      role: validRole,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+      lastLoginAt: null,
+      createdBy: req.staff?.email || req.user?.email || 'admin'
+    };
+
+    await db.collection(STAFF_COLLECTION).doc(docId).set(staffDoc);
+
+    return res.status(201).json({
+      success: true,
+      message: `Staff user '${name.trim()}' created successfully.`,
+      staff: {
+        id: docId,
+        name: staffDoc.name,
+        email: staffDoc.email,
+        role: staffDoc.role,
+        isActive: staffDoc.isActive,
+        createdAt: staffDoc.createdAt,
+      }
+    });
+  } catch (error) {
+    console.error('[createStaff] Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to create staff member.',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * PUT /api/org/staff/:id/password
+ * Admin only: update/reset a staff member's password
+ */
+export const updateStaffPassword = async (req, res) => {
+  const { id } = req.params;
+  const { newPassword } = req.body;
+
+  if (!newPassword || newPassword.length < 6) {
+    return res.status(400).json({
+      success: false,
+      message: 'New password must be at least 6 characters long.'
+    });
+  }
+
+  try {
+    let docRef = db.collection(STAFF_COLLECTION).doc(id);
+    let docSnap = await docRef.get();
+
+    if (!docSnap.exists) {
+      const qSnap = await db.collection(STAFF_COLLECTION).where('email', '==', id.trim().toLowerCase()).limit(1).get();
+      if (!qSnap.empty) {
+        docRef = qSnap.docs[0].ref;
+        docSnap = qSnap.docs[0];
+      } else {
+        return res.status(404).json({
+          success: false,
+          message: 'Staff member not found.'
+        });
+      }
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
+    await docRef.update({
+      hashedPassword,
+      updatedAt: new Date().toISOString(),
+      passwordChangedAt: new Date().toISOString(),
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password updated successfully.'
+    });
+  } catch (error) {
+    console.error('[updateStaffPassword] Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update staff password.',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * PUT /api/org/staff/:id
+ * Admin only: update staff member details (name, role, isActive)
+ */
+export const updateStaff = async (req, res) => {
+  const { id } = req.params;
+  const { name, role, isActive } = req.body;
+
+  try {
+    let docRef = db.collection(STAFF_COLLECTION).doc(id);
+    let docSnap = await docRef.get();
+
+    if (!docSnap.exists) {
+      const qSnap = await db.collection(STAFF_COLLECTION).where('email', '==', id.trim().toLowerCase()).limit(1).get();
+      if (!qSnap.empty) {
+        docRef = qSnap.docs[0].ref;
+        docSnap = qSnap.docs[0];
+      } else {
+        return res.status(404).json({
+          success: false,
+          message: 'Staff member not found.'
+        });
+      }
+    }
+
+    const updates = { updatedAt: new Date().toISOString() };
+    if (name !== undefined) updates.name = name.trim();
+    if (role !== undefined) {
+      const allowedRoles = ['admin', 'catalog', 'orders', 'delivery'];
+      if (!allowedRoles.includes(role.toLowerCase())) {
+        return res.status(400).json({ success: false, message: 'Invalid role specified.' });
+      }
+      updates.role = role.toLowerCase();
+    }
+    if (isActive !== undefined) updates.isActive = Boolean(isActive);
+
+    await docRef.update(updates);
+
+    const updatedSnap = await docRef.get();
+    const data = updatedSnap.data();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Staff member updated successfully.',
+      staff: {
+        id: docRef.id,
+        name: data.name,
+        email: data.email,
+        role: data.role,
+        isActive: data.isActive,
+        createdAt: data.createdAt,
+        lastLoginAt: data.lastLoginAt,
+      }
+    });
+  } catch (error) {
+    console.error('[updateStaff] Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update staff member.',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * DELETE /api/org/staff/:id
+ * Admin only: remove a staff member
+ */
+export const deleteStaff = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    let docRef = db.collection(STAFF_COLLECTION).doc(id);
+    let docSnap = await docRef.get();
+
+    if (!docSnap.exists) {
+      const qSnap = await db.collection(STAFF_COLLECTION).where('email', '==', id.trim().toLowerCase()).limit(1).get();
+      if (!qSnap.empty) {
+        docRef = qSnap.docs[0].ref;
+        docSnap = qSnap.docs[0];
+      } else {
+        return res.status(404).json({
+          success: false,
+          message: 'Staff member not found.'
+        });
+      }
+    }
+
+    const data = docSnap.data();
+    const callerEmail = req.staff?.email || req.user?.email;
+
+    if (callerEmail && data.email && callerEmail.toLowerCase() === data.email.toLowerCase()) {
+      return res.status(400).json({
+        success: false,
+        message: 'You cannot delete your own admin account.'
+      });
+    }
+
+    await docRef.delete();
+
+    return res.status(200).json({
+      success: true,
+      message: `Staff member '${data.name || data.email}' removed successfully.`
+    });
+  } catch (error) {
+    console.error('[deleteStaff] Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to remove staff member.',
+      error: error.message
+    });
+  }
+};
+

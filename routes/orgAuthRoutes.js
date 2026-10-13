@@ -1,6 +1,16 @@
 import express from 'express';
-import { orgLogin, orgLogout, getStaffMe, verifyOrgToken } from '../controllers/orgAuthController.js';
-import { verifyJWT } from '../middleware/verifyJWT.js';
+import {
+  orgLogin,
+  orgLogout,
+  getStaffMe,
+  verifyOrgToken,
+  getAllStaff,
+  createStaff,
+  updateStaff,
+  updateStaffPassword,
+  deleteStaff,
+} from '../controllers/orgAuthController.js';
+import { verifyJWT, requireAdmin } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
@@ -16,4 +26,12 @@ router.post('/auth/verify-token', verifyOrgToken);
 router.get('/me',      verifyJWT, getStaffMe);
 router.get('/auth/me', verifyJWT, getStaffMe);
 
+// Admin-only Staff Management
+router.get('/staff',              requireAdmin, getAllStaff);
+router.post('/staff',             requireAdmin, createStaff);
+router.put('/staff/:id/password', requireAdmin, updateStaffPassword);
+router.put('/staff/:id',          requireAdmin, updateStaff);
+router.delete('/staff/:id',       requireAdmin, deleteStaff);
+
 export default router;
+
