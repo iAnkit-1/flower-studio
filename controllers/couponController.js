@@ -191,3 +191,102 @@ export const getAllCoupons = async (req, res) => {
     });
   }
 };
+
+/**
+ * Create or Update Coupon Code (Admin / Staff only)
+ * POST /api/coupons or PUT /api/coupons/:code
+ */
+export const createOrUpdateCoupon = async (req, res) => {
+  try {
+    const code = req.params.code || req.body.code;
+    const discount = req.body.discount ?? req.body.amount;
+
+    if (!code || typeof code !== 'string' || discount === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid coupon code and discount amount are required.',
+      });
+    }
+
+    const cleanCode = code.trim().toUpperCase();
+    const discountVal = parseFloat(discount);
+
+    if (isNaN(discountVal) || discountVal <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Discount must be a positive number.',
+      });
+    }
+
+    if (db) {
+      const docRef = db.collection('coupon_codes').doc('codes');
+      await docRef.set(
+        {
+          code: {
+            [cleanCode]: discountVal,
+          },
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Coupon code ${cleanCode} saved successfully with discount ₹${discountVal}.`,
+      coupon: { code: cleanCode, discount: discountVal },
+    });
+  } catch (error) {
+    console.error('Error saving coupon code:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to save coupon code.',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * Delete Coupon Code (Admin / Staff only)
+ * DELETE /api/coupons/:code
+ */
+export const deleteCoupon = async (req, res) => {
+  try {
+    const { code } = req.params;
+    if (!code) {
+      return res.status(400).json({ success: false, message: 'Coupon code is required.' });
+    }
+
+    const cleanCode = code.trim().toUpperCase();
+
+    if (db) {
+      const docRef = db.collection('coupon_codes').doc('codes');
+      const snap = await docRef.get();
+      if (snap.exists) {
+        const data = snap.data() || {};
+        const currentCodes = { ...(data.code || data.codes || {}) };
+        delete currentCodes[cleanCode];
+
+        await docRef.set(
+          {
+            code: currentCodes,
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Coupon code ${cleanCode} deleted successfully.`,
+    });
+  } catch (error) {
+    console.error('Error deleting coupon code:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete coupon code.',
+      error: error.message,
+    });
+  }
+};

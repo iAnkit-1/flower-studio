@@ -9,10 +9,12 @@ import {
   getMockCheckout,
   paymentCallback,
   getAllOrders,
+  getOrderById,
   updateOrderStatus,
   updateOrderPaymentStatus,
   updateOrderDeliveryStatus,
   getCustomOrders,
+  getCustomOrdersForCaller,
   createCustomOrder,
   updateCustomOrder,
   getRequestedOrders,
@@ -20,37 +22,45 @@ import {
   updateRequestedOrder,
   createSubscription
 } from '../controllers/orderController.js';
+import {
+  requireAuth,
+  requireAdminOrStaff,
+} from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
 // --- Regular Standard Orders & Payments ---
-router.post('/', createOrder);
-router.post('/create-order', createOrder);
-router.get('/', getAllOrders); // Fetch all standard orders
-router.post('/verify', verifyPayment);
+router.post('/', requireAuth, createOrder);
+router.post('/create-order', requireAuth, createOrder);
+router.get('/', requireAuth, getAllOrders); // Authenticated customer (own orders) or staff (all orders)
+router.post('/verify', requireAuth, verifyPayment);
 router.post('/webhook', handleWebhook);
-router.post('/by-ids', getOrdersByIds);
-router.get('/:orderId/invoice', getInvoice);
-router.get('/:orderId/status', getOrderStatus);
+router.post('/by-ids', requireAuth, getOrdersByIds);
 router.get('/mock-checkout/:orderId', getMockCheckout);
 router.get('/callback', paymentCallback);
 
 // --- Subscriptions ---
-router.post('/subscriptions', createSubscription);
-
-// --- Operational updates ---
-router.put('/:orderId/status', updateOrderStatus); // Update order confirmed/cancelled status
-router.put('/:orderId/payment', updateOrderPaymentStatus); // Update payment pending/success/cash
-router.put('/:orderId/delivery', updateOrderDeliveryStatus); // Update delivery checkpoint status
+router.post('/subscriptions', requireAuth, createSubscription);
 
 // --- Custom Orders ---
-router.get('/custom/all', getCustomOrders); // Fetch all custom orders
-router.post('/custom', createCustomOrder); // Create new custom order request
-router.put('/custom/:id', updateCustomOrder); // Update quote/status
+router.get('/custom/all', requireAdminOrStaff, getCustomOrders); // Admin / staff only (401 without token, 403 for customer)
+router.get('/custom', requireAuth, getCustomOrdersForCaller); // Authenticated owner (own custom orders) or staff (all)
+router.post('/custom', requireAuth, createCustomOrder); // Authenticated customer creation
+router.put('/custom/:id', requireAdminOrStaff, updateCustomOrder); // Staff update quote/status
 
 // --- Requested Orders ---
-router.get('/requested/all', getRequestedOrders); // Fetch all out-of-stock requested orders
+router.get('/requested/all', requireAdminOrStaff, getRequestedOrders); // Admin / staff only
 router.post('/requested', createRequestedOrder); // Submit new out-of-stock request
-router.put('/requested/:id', updateRequestedOrder); // Update status (Confirmed/Cancelled)
+router.put('/requested/:id', requireAdminOrStaff, updateRequestedOrder); // Staff update
+
+// --- Operational updates (Admin & Authorized Staff only) ---
+router.put('/:orderId/status', requireAdminOrStaff, updateOrderStatus);
+router.put('/:orderId/payment', requireAdminOrStaff, updateOrderPaymentStatus);
+router.put('/:orderId/delivery', requireAdminOrStaff, updateOrderDeliveryStatus);
+
+// --- Single Order details, invoice & status (Owner or authorized staff) ---
+router.get('/:orderId/invoice', requireAuth, getInvoice);
+router.get('/:orderId/status', requireAuth, getOrderStatus);
+router.get('/:orderId', requireAuth, getOrderById);
 
 export default router;

@@ -6,6 +6,7 @@ import { httpServerHandler } from 'cloudflare:node';
 
 import productRoutes           from './routes/productRoutes.js';
 import authRoutes              from './routes/authRoutes.js';
+import userRoutes              from './routes/userRoutes.js';
 import orderRoutes             from './routes/orderRoutes.js';
 import paymentRoutes           from './routes/paymentRoutes.js';
 import supportRoutes           from './routes/supportRoutes.js';
@@ -77,7 +78,9 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 // Customer routes (Firebase Auth & Public Data)
 app.use('/api/products',                 productRoutes);
 app.use('/api/auth',                     authRoutes);
+app.use('/api/users',                    userRoutes);
 app.use('/api/orders',                   orderRoutes);
+app.use('/api/custom-orders',            orderRoutes);
 app.use('/api/payments',                 paymentRoutes);
 app.use('/api/support',                  supportRoutes);
 app.use('/api/delivery-charges',         deliveryChargesRoutes);

@@ -12,6 +12,10 @@ import {
   uploadDirectToR2,
   serveR2Image,
 } from '../controllers/productController.js';
+import {
+  optionalAuth,
+  requireAdminOrStaff,
+} from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
@@ -19,25 +23,26 @@ const router = express.Router();
 router.get('/images/*', serveR2Image);
 router.get('/image/*', serveR2Image);
 
-// R2 Pre-signed URL generation for direct upload
-router.post('/r2-presigned-url', getR2UploadPresignedUrl);
-router.post('/upload-signature', getR2UploadPresignedUrl);
+// R2 Pre-signed URL generation for direct upload (Admin / Staff only)
+router.post('/r2-presigned-url', requireAdminOrStaff, getR2UploadPresignedUrl);
+router.post('/upload-signature', requireAdminOrStaff, getR2UploadPresignedUrl);
 
-// R2 Direct backend upload fallback
-router.post('/upload-direct', uploadDirectToR2);
+// R2 Direct backend upload fallback (Admin / Staff only)
+router.post('/upload-direct', requireAdminOrStaff, uploadDirectToR2);
 
-// Greeting cards dedicated endpoint
-router.get('/greeting-cards', getGreetingCards);
+// Dedicated endpoints (Public catalogue data)
+router.get('/greeting-cards', optionalAuth, getGreetingCards);
+router.get('/celebration', optionalAuth, getCelebrationProducts);
+router.get('/celebration-items', optionalAuth, getCelebrationProducts);
 
-// Celebration products dedicated endpoint
-router.get('/celebration', getCelebrationProducts);
-router.get('/celebration-items', getCelebrationProducts);
+// Product Catalogue & Management CRUD
+// GET /api/products -> Public; returns only active catalogue data with intended public fields
+router.get('/', optionalAuth, getAllProducts);
+router.get('/:id', optionalAuth, getProductById);
 
-// Product CRUD
-router.post('/', createProduct);
-router.get('/', getAllProducts);
-router.get('/:id', getProductById);
-router.put('/:id', updateProduct);
-router.delete('/:id', deleteProduct);
+// Mutations require Admin or Staff authorization
+router.post('/', requireAdminOrStaff, createProduct);
+router.put('/:id', requireAdminOrStaff, updateProduct);
+router.delete('/:id', requireAdminOrStaff, deleteProduct);
 
 export default router;

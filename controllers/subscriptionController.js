@@ -2,6 +2,7 @@ import db from '../config/db.js';
 import crypto from 'crypto';
 import { normalizeImageUrl } from './productController.js';
 import { getRazorpayClient, createRazorpayOrder } from '../config/razorpay.js';
+import { normalizePhone } from '../middleware/authMiddleware.js';
 
 
 /**
@@ -541,21 +542,30 @@ export const verifyCustomerSubscriptionPayment = async (req, res) => {
 // GET /api/subscriptions/my-subscriptions
 export const getMySubscriptions = async (req, res) => {
   try {
-    const { userId, userPhone, phone } = req.query;
-    const targetPhone = userPhone || phone;
+    const isStaff = Boolean(req.user?.isStaff || req.user?.isAdmin);
+    const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
+    const callerPhone = normalizePhone(req.user?.phoneNumber || '');
 
-    if (!userId && !targetPhone) {
-      return res.status(400).json({
-        success: false,
-        message: 'userId or userPhone is required.',
-      });
+    let queryUserId = callerUserId;
+    let queryPhone = callerPhone;
+
+    if (isStaff) {
+      const { userId, userPhone, phone } = req.query;
+      if (userId) queryUserId = userId.trim();
+      if (userPhone || phone) queryPhone = normalizePhone(userPhone || phone);
+    }
+
+    if (!queryUserId && !queryPhone) {
+      return res.status(200).json({ success: true, subscriptions: [] });
     }
 
     let snapshot;
-    if (userId && db) {
-      snapshot = await db.collection('subscriptions').where('userId', '==', userId).get();
-    } else if (targetPhone && db) {
-      snapshot = await db.collection('subscriptions').where('customerPhone', '==', targetPhone).get();
+    if (queryUserId && db) {
+      snapshot = await db.collection('subscriptions').where('userId', '==', queryUserId).get();
+    }
+    if ((!snapshot || snapshot.empty) && queryPhone && db) {
+      const variants = [queryPhone, `+91${queryPhone}`, `+91 ${queryPhone}`];
+      snapshot = await db.collection('subscriptions').where('customerPhone', 'in', variants).get();
     }
 
     if (!snapshot || snapshot.empty) {

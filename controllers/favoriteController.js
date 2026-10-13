@@ -9,17 +9,33 @@ const normalizePhone = (phone) => {
 };
 
 /**
+ * Resolve target user document ID based on authenticated token and caller role
+ */
+const resolveFavoriteUserDocId = (req) => {
+  const isStaff = Boolean(req.user?.isStaff || req.user?.isAdmin);
+  const callerPhone = normalizePhone(req.user?.phoneNumber || '');
+  const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
+
+  if (isStaff) {
+    const rawPhone = req.query.phone || req.query.userPhone || req.body?.phone || req.body?.userPhone;
+    const cleanPhone = normalizePhone(rawPhone);
+    const targetUserId = req.query.userId || req.query.uid || req.body?.userId || req.body?.uid;
+    return cleanPhone || targetUserId || callerPhone || callerUserId;
+  }
+
+  // Normal authenticated customer is strictly bound to own verified identity
+  return callerPhone || callerUserId;
+};
+
+/**
  * Get Favorite Products / IDs for Authenticated User
- * GET /api/favorites?phone=...&userId=...
+ * GET /api/favorites
  */
 export const getUserFavorites = async (req, res) => {
   try {
-    const rawPhone = req.query.phone || req.query.userPhone || req.headers['x-user-phone'];
-    const userId = req.query.userId || req.query.uid || req.headers['x-user-id'];
+    const targetDocId = resolveFavoriteUserDocId(req);
 
-    const cleanPhone = normalizePhone(rawPhone);
-
-    if (!cleanPhone && !userId) {
+    if (!targetDocId) {
       return res.status(200).json({
         success: true,
         favorites: [],
@@ -35,7 +51,6 @@ export const getUserFavorites = async (req, res) => {
       });
     }
 
-    const targetDocId = cleanPhone || userId;
     const favsRef = db.collection('users').doc(targetDocId).collection('favorites');
     const snap = await favsRef.orderBy('addedAt', 'desc').get();
 
@@ -76,10 +91,6 @@ export const getUserFavorites = async (req, res) => {
 export const toggleFavorite = async (req, res) => {
   try {
     const { productId, isFavorite, product } = req.body;
-    const rawPhone = req.body.phone || req.body.userPhone || req.headers['x-user-phone'];
-    const userId = req.body.userId || req.body.uid || req.headers['x-user-id'];
-
-    const cleanPhone = normalizePhone(rawPhone);
 
     if (!productId) {
       return res.status(400).json({
@@ -88,7 +99,14 @@ export const toggleFavorite = async (req, res) => {
       });
     }
 
-    const targetDocId = cleanPhone || userId || 'guest_user';
+    const targetDocId = resolveFavoriteUserDocId(req);
+
+    if (!targetDocId) {
+      return res.status(401).json({
+        success: false,
+        message: 'User authentication required.',
+      });
+    }
 
     if (db) {
       const userRef = db.collection('users').doc(targetDocId);
@@ -138,16 +156,19 @@ export const toggleFavorite = async (req, res) => {
 
 /**
  * Delete Favorite by ID
- * DELETE /api/favorites/:id?phone=...&userId=...
+ * DELETE /api/favorites/:id
  */
 export const deleteFavorite = async (req, res) => {
   try {
     const { id } = req.params;
-    const rawPhone = req.query.phone || req.query.userPhone || req.headers['x-user-phone'];
-    const userId = req.query.userId || req.query.uid || req.headers['x-user-id'];
+    const targetDocId = resolveFavoriteUserDocId(req);
 
-    const cleanPhone = normalizePhone(rawPhone);
-    const targetDocId = cleanPhone || userId || 'guest_user';
+    if (!targetDocId) {
+      return res.status(401).json({
+        success: false,
+        message: 'User authentication required.',
+      });
+    }
 
     if (db && id) {
       await db.collection('users').doc(targetDocId).collection('favorites').doc(id).delete();

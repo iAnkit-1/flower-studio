@@ -1,6 +1,10 @@
+import jwt from 'jsonwebtoken';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import db, { admin } from '../config/db.js';
 import { findUserDoc } from './reminderController.js';
+import { normalizePhone } from '../middleware/authMiddleware.js';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'fs_org_jwt_secret_change_in_prod_2024';
 
 const GOOGLE_JWKS = createRemoteJWKSet(
   new URL('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com')
@@ -128,10 +132,19 @@ export const verifyFirebaseToken = async (req, res) => {
       }
     }
 
+    const customerPayload = {
+      uid: decodedToken?.uid || userProfile.id,
+      userId: decodedToken?.uid || userProfile.id,
+      phoneNumber: cleanPhone,
+      email: userProfile.email || '',
+      role: 'customer'
+    };
+    const signedCustomerToken = jwt.sign(customerPayload, JWT_SECRET, { expiresIn: '30d' });
+
     return res.status(200).json({
       success: true,
       message: 'Firebase token verified successfully.',
-      token: idToken || `fs_token_${mobile10Digits || decodedToken?.uid}`,
+      token: signedCustomerToken,
       user: userProfile
     });
 
@@ -159,6 +172,24 @@ export const getUserProfile = async (req, res) => {
   }
 
   const cleanPhone = phoneNumber.trim();
+
+  // Enforce customer ownership: customer cannot inspect other users' profiles
+  if (req.user && !req.user.isStaff && !req.user.isAdmin) {
+    const callerPhone = normalizePhone(req.user.phoneNumber);
+    const callerId = (req.user.userId || req.user.uid || '').trim();
+    const targetDigits = normalizePhone(cleanPhone);
+
+    const matches = (callerPhone && targetDigits && callerPhone === targetDigits) ||
+                    (callerId && callerId === cleanPhone);
+
+    if (!matches) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You do not have permission to view this profile.',
+        code: 'FORBIDDEN'
+      });
+    }
+  }
 
   try {
     if (db) {
@@ -236,6 +267,24 @@ export const updateUserProfile = async (req, res) => {
       success: false,
       message: 'Mobile number or User ID is required for updating profile.'
     });
+  }
+
+  // Enforce customer ownership: cannot modify another user's profile
+  if (req.user && !req.user.isStaff && !req.user.isAdmin) {
+    const callerPhone = normalizePhone(req.user.phoneNumber);
+    const callerId = (req.user.userId || req.user.uid || '').trim();
+    const targetDigits = normalizePhone(cleanPhone);
+
+    const matches = (callerPhone && targetDigits && callerPhone === targetDigits) ||
+                    (callerId && (callerId === targetId || callerId === (userId || '').trim()));
+
+    if (!matches) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You do not have permission to modify another user\'s profile.',
+        code: 'FORBIDDEN'
+      });
+    }
   }
 
   const updatedAddress = {

@@ -77,15 +77,37 @@ export const findUserDoc = async (userId, rawPhone) => {
 };
 
 /**
+ * Resolve target user identity based on verified auth token and caller role
+ */
+export const resolveReminderUserIdentity = (req) => {
+  const isStaff = Boolean(req.user?.isStaff || req.user?.isAdmin);
+  const callerPhone = normalizePhone(req.user?.phoneNumber || '');
+  const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
+
+  if (isStaff) {
+    const rawPhone = req.query?.phone || req.query?.userPhone || req.body?.phone || req.body?.userPhone;
+    const targetUserId = req.query?.userId || req.query?.uid || req.body?.userId || req.body?.uid;
+    return {
+      userId: targetUserId || callerUserId,
+      phone: rawPhone || callerPhone,
+    };
+  }
+
+  // Authenticated customer is strictly bound to own verified identity
+  return {
+    userId: callerUserId,
+    phone: callerPhone,
+  };
+};
+
+/**
  * Get Reminders for Authenticated User
  * Reads reminders directly from the `reminders` array in the user's document in `users` collection.
- * GET /api/reminders?phone=...&userId=...
+ * GET /api/reminders
  */
 export const getUserReminders = async (req, res) => {
   try {
-    const rawPhone = req.query.phone || req.query.userPhone || req.body?.phone || req.headers['x-user-phone'];
-    const userId = req.query.userId || req.query.uid || req.body?.userId || req.headers['x-user-id'];
-
+    const { userId, phone: rawPhone } = resolveReminderUserIdentity(req);
     const cleanPhone = normalizePhone(rawPhone);
 
     if (!cleanPhone && (!userId || userId === 'null' || userId === 'undefined')) {
@@ -154,14 +176,12 @@ export const getUserReminders = async (req, res) => {
  * Add New Reminder for Authenticated User
  * Appends the reminder directly to the `reminders` array in the user's document in `users` collection.
  * POST /api/reminders
- * Body: { note, occasion, date, time, phone?, userId? }
+ * Body: { note, occasion, date, time }
  */
 export const createReminder = async (req, res) => {
   try {
     const { note, occasion, date, time } = req.body;
-    const rawPhone = req.body.phone || req.body.userPhone || req.query.phone || req.headers['x-user-phone'];
-    const userId = req.body.userId || req.body.uid || req.query.userId || req.headers['x-user-id'];
-
+    const { userId, phone: rawPhone } = resolveReminderUserIdentity(req);
     const cleanPhone = normalizePhone(rawPhone);
 
     if (!cleanPhone && (!userId || userId === 'null' || userId === 'undefined')) {
@@ -247,9 +267,7 @@ export const createReminder = async (req, res) => {
 export const deleteReminder = async (req, res) => {
   try {
     const { id } = req.params;
-    const rawPhone = req.query.phone || req.query.userPhone || req.body?.phone || req.headers['x-user-phone'];
-    const userId = req.query.userId || req.query.uid || req.body?.userId || req.headers['x-user-id'];
-
+    const { userId, phone: rawPhone } = resolveReminderUserIdentity(req);
     const cleanPhone = normalizePhone(rawPhone);
 
     if (!cleanPhone && (!userId || userId === 'null' || userId === 'undefined')) {
@@ -306,9 +324,7 @@ export const updateReminder = async (req, res) => {
   try {
     const { id } = req.params;
     const { note, occasion, date, time } = req.body;
-    const rawPhone = req.body.phone || req.body.userPhone || req.query.phone || req.headers['x-user-phone'];
-    const userId = req.body.userId || req.body.uid || req.query.userId || req.headers['x-user-id'];
-
+    const { userId, phone: rawPhone } = resolveReminderUserIdentity(req);
     const cleanPhone = normalizePhone(rawPhone);
 
     if (!cleanPhone && (!userId || userId === 'null' || userId === 'undefined')) {
@@ -369,9 +385,7 @@ export const updateReminder = async (req, res) => {
 export const syncReminders = async (req, res) => {
   try {
     const { reminders } = req.body;
-    const rawPhone = req.body.phone || req.body.userPhone || req.query.phone || req.headers['x-user-phone'];
-    const userId = req.body.userId || req.body.uid || req.query.userId || req.headers['x-user-id'];
-
+    const { userId, phone: rawPhone } = resolveReminderUserIdentity(req);
     const cleanPhone = normalizePhone(rawPhone);
 
     if (!cleanPhone && (!userId || userId === 'null' || userId === 'undefined')) {

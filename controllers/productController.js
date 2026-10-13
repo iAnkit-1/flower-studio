@@ -409,6 +409,59 @@ export const createProduct = async (req, res) => {
 
 /*
 |--------------------------------------------------------------------------
+| Product Formatting for Caller Role
+|--------------------------------------------------------------------------
+*/
+export const formatProductDocument = (doc, req) => {
+  const data = doc.data();
+  const isStaff = Boolean(req.user?.isStaff);
+
+  const normalizedImages = (data.images || []).map((img) =>
+    normalizeImageUrl(img, req)
+  );
+
+  const baseProduct = {
+    id: data.id || doc.id,
+    title: data.title || '',
+    description: data.description || '',
+    mrp: parseFloat(data.mrp || 0.0),
+    salePrice: parseFloat(data.salePrice || 0.0),
+    discountPercentage: parseFloat(data.discountPercentage || 0.0),
+    ratings: parseFloat(data.ratings || 0.0),
+    reviewsCount: data.reviewsCount || 0,
+    category: data.category || '',
+    subCategory: data.subCategory || '',
+    availability: data.availability || 'available',
+    stock: parseFloat(data.stock || 0.0),
+    tags: normalizeStringArray(data.tags),
+    addons: data.addons || {},
+    occasions: normalizeStringArray(data.occasions),
+    images: normalizedImages,
+    createdAt: data.createdAt
+      ? (typeof data.createdAt.toDate === 'function'
+          ? data.createdAt.toDate().toISOString()
+          : data.createdAt)
+      : null,
+    addOns: data.addOns || [],
+    similarItems: data.similarItems || [],
+    availableCombos: normalizeAvailableCombos(data.availableCombos || data.available_combos),
+  };
+
+  // Internal catalog/inventory metadata only accessible by authorized staff
+  if (isStaff) {
+    baseProduct.hsnCode = data.hsnCode || '';
+    baseProduct.barcode = data.barcode || '';
+    baseProduct.sku = data.sku || '';
+    if (data.costPrice !== undefined) {
+      baseProduct.costPrice = data.costPrice;
+    }
+  }
+
+  return baseProduct;
+};
+
+/*
+|--------------------------------------------------------------------------
 | Get All Products
 |--------------------------------------------------------------------------
 */
@@ -428,64 +481,24 @@ export const getAllProducts = async (req, res) => {
         .get();
     }
 
-    const productsMapped = snapshot.docs.map((doc) => {
-      const data = doc.data();
+    const isStaff = Boolean(req.user?.isStaff);
 
-      // Normalize images so any legacy or raw S3 URLs render publicly
-      const normalizedImages = (data.images || []).map((img) =>
-        normalizeImageUrl(img, req)
-      );
+    let docsToProcess = snapshot.docs;
 
-      return {
-        id: data.id || doc.id,
+    // For public / customer users: only return active catalogue data
+    if (!isStaff) {
+      docsToProcess = docsToProcess.filter((doc) => {
+        const data = doc.data();
+        const availability = (data.availability || '').toLowerCase().trim();
+        const status = (data.status || '').toLowerCase().trim();
+        if (data.isActive === false) return false;
+        if (['archived', 'hidden', 'inactive', 'draft', 'deleted'].includes(availability)) return false;
+        if (['inactive', 'archived', 'deleted'].includes(status)) return false;
+        return true;
+      });
+    }
 
-        hsnCode: data.hsnCode || '',
-        barcode: data.barcode || '',
-        sku: data.sku || '',
-
-        title: data.title || '',
-        description: data.description || '',
-
-        mrp: parseFloat(data.mrp || 0.0),
-        salePrice: parseFloat(
-          data.salePrice || 0.0
-        ),
-
-        discountPercentage: parseFloat(
-          data.discountPercentage || 0.0
-        ),
-
-        ratings: parseFloat(
-          data.ratings || 0.0
-        ),
-
-        reviewsCount: data.reviewsCount || 0,
-
-        category: data.category || '',
-        subCategory: data.subCategory || '',
-
-        availability:
-          data.availability || 'available',
-
-        stock: parseFloat(data.stock || 0.0),
-
-        tags: normalizeStringArray(data.tags),
-        addons: data.addons || {},
-        occasions: normalizeStringArray(data.occasions),
-
-        images: normalizedImages,
-
-        createdAt: data.createdAt
-          ? (typeof data.createdAt.toDate === 'function'
-              ? data.createdAt.toDate().toISOString()
-              : data.createdAt)
-          : null,
-
-        addOns: data.addOns || [],
-        similarItems: data.similarItems || [],
-        availableCombos: normalizeAvailableCombos(data.availableCombos || data.available_combos),
-      };
-    });
+    const productsMapped = docsToProcess.map((doc) => formatProductDocument(doc, req));
 
     const excludedCategories = [
       'cake accessories',
@@ -545,39 +558,21 @@ export const getProductById = async (req, res) => {
     }
 
     const data = doc.data();
-    const normalizedImages = (data.images || []).map((img) =>
-      normalizeImageUrl(img, req)
-    );
+    const isStaff = Boolean(req.user?.isStaff);
 
-    const product = {
-      id: data.id || doc.id,
-      hsnCode: data.hsnCode || '',
-      barcode: data.barcode || '',
-      sku: data.sku || '',
-      title: data.title || '',
-      description: data.description || '',
-      mrp: parseFloat(data.mrp || 0.0),
-      salePrice: parseFloat(data.salePrice || 0.0),
-      discountPercentage: parseFloat(data.discountPercentage || 0.0),
-      ratings: parseFloat(data.ratings || 0.0),
-      reviewsCount: data.reviewsCount || 0,
-      category: data.category || '',
-      subCategory: data.subCategory || '',
-      availability: data.availability || 'available',
-      stock: parseFloat(data.stock || 0.0),
-      tags: normalizeStringArray(data.tags),
-      addons: data.addons || {},
-      occasions: normalizeStringArray(data.occasions),
-      images: normalizedImages,
-      createdAt: data.createdAt
-        ? (typeof data.createdAt.toDate === 'function'
-            ? data.createdAt.toDate().toISOString()
-            : data.createdAt)
-        : null,
-      addOns: data.addOns || [],
-      similarItems: data.similarItems || [],
-      availableCombos: normalizeAvailableCombos(data.availableCombos || data.available_combos),
-    };
+    if (!isStaff) {
+      const availability = (data.availability || '').toLowerCase().trim();
+      const status = (data.status || '').toLowerCase().trim();
+      if (
+        data.isActive === false ||
+        ['archived', 'hidden', 'inactive', 'draft', 'deleted'].includes(availability) ||
+        ['inactive', 'archived', 'deleted'].includes(status)
+      ) {
+        return res.status(404).json({ success: false, message: 'Product not found or currently unavailable.' });
+      }
+    }
+
+    const product = formatProductDocument(doc, req);
 
     return res.status(200).json({
       success: true,
@@ -612,42 +607,22 @@ export const getGreetingCards = async (req, res) => {
         .get();
     }
 
-    const allMapped = snapshot.docs.map((doc) => {
-      const data = doc.data();
-      const normalizedImages = (data.images || []).map((img) =>
-        normalizeImageUrl(img, req)
-      );
+    const isStaff = Boolean(req.user?.isStaff);
+    let docsToProcess = snapshot.docs;
 
-      return {
-        id: data.id || doc.id,
-        hsnCode: data.hsnCode || '',
-        barcode: data.barcode || '',
-        sku: data.sku || '',
-        title: data.title || '',
-        description: data.description || '',
-        mrp: parseFloat(data.mrp || 0.0),
-        salePrice: parseFloat(data.salePrice || 0.0),
-        discountPercentage: parseFloat(data.discountPercentage || 0.0),
-        ratings: parseFloat(data.ratings || 0.0),
-        reviewsCount: data.reviewsCount || 0,
-        category: data.category || '',
-        subCategory: data.subCategory || '',
-        availability: data.availability || 'available',
-        stock: parseFloat(data.stock || 0.0),
-        tags: normalizeStringArray(data.tags),
-        addons: data.addons || {},
-        occasions: normalizeStringArray(data.occasions),
-        images: normalizedImages,
-        createdAt: data.createdAt
-          ? (typeof data.createdAt.toDate === 'function'
-              ? data.createdAt.toDate().toISOString()
-              : data.createdAt)
-          : null,
-        addOns: data.addOns || [],
-        similarItems: data.similarItems || [],
-        availableCombos: normalizeAvailableCombos(data.availableCombos || data.available_combos),
-      };
-    });
+    if (!isStaff) {
+      docsToProcess = docsToProcess.filter((doc) => {
+        const data = doc.data();
+        const availability = (data.availability || '').toLowerCase().trim();
+        const status = (data.status || '').toLowerCase().trim();
+        if (data.isActive === false) return false;
+        if (['archived', 'hidden', 'inactive', 'draft', 'deleted'].includes(availability)) return false;
+        if (['inactive', 'archived', 'deleted'].includes(status)) return false;
+        return true;
+      });
+    }
+
+    const allMapped = docsToProcess.map((doc) => formatProductDocument(doc, req));
 
     const greetingCards = allMapped.filter((p) => {
       const cat = (p.category || '').toLowerCase().trim();

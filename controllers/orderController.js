@@ -2,6 +2,7 @@ import db from '../config/db.js';
 import crypto from 'crypto';
 import { normalizeImageUrl } from './productController.js';
 import { getRazorpayClient, createRazorpayOrder } from '../config/razorpay.js';
+import { normalizePhone } from '../middleware/authMiddleware.js';
 
 
 /**
@@ -150,11 +151,14 @@ export const createOrder = async (req, res) => {
       }
     }
 
+    const verifiedUserId = (req.user && !req.user.isStaff) ? (req.user.userId || req.user.uid) : (req.body.userId || req.body.user_id || `USR_${Date.now()}`);
+    const verifiedUserPhone = (req.user && !req.user.isStaff && req.user.phoneNumber) ? req.user.phoneNumber : (req.body.userPhone || req.body.user_phone || recipient_phone);
+
     const orderDocument = {
       id: orderId,
       orderId: orderId,
-      userId: req.body.userId || req.body.user_id || `GUEST_${Date.now()}`,
-      userPhone: req.body.userPhone || req.body.user_phone || recipient_phone,
+      userId: verifiedUserId,
+      userPhone: verifiedUserPhone,
       recipientName: recipient_name,
       recipientPhone: recipient_phone,
       recipient_name: recipient_name,
@@ -287,12 +291,31 @@ export const verifyPayment = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Order draft not found in database.' });
     }
 
+    // Verify caller ownership if caller is an authenticated customer
+    if (req.user && !req.user.isStaff && !req.user.isAdmin) {
+      const callerUserId = (req.user.userId || req.user.uid || '').trim();
+      const callerPhone = normalizePhone(req.user.phoneNumber || '');
+      const orderUserId = (order.userId || order.user_id || '').trim();
+      const orderPhone = normalizePhone(order.userPhone || order.user_phone || order.recipientPhone || order.recipient_phone || '');
+
+      const isOwner = (callerUserId && callerUserId === orderUserId) ||
+                      (callerPhone && callerPhone === orderPhone);
+
+      if (!isOwner && (orderUserId || orderPhone)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You do not have permission to verify this order.',
+        });
+      }
+    }
+
     // 3. Verify Signature
     let isSigValid = false;
     const keySecret = process.env.RAZORPAY_KEY_SECRET || '37HQJoRCjVLSG8uf4FzaR3pQ';
     const rzpOrderId = razorpay_order_id || order.razorpayOrderId || order.razorpay_order_id;
+    const isDev = process.env.NODE_ENV !== 'production';
 
-    if (isSimulated || razorpay_signature === 'simulated_signature_ok') {
+    if ((isSimulated || razorpay_signature === 'simulated_signature_ok') && isDev) {
       isSigValid = true;
     } else if (rzpOrderId && razorpay_payment_id && razorpay_signature) {
       const dataToVerify = `${rzpOrderId}|${razorpay_payment_id}`;
@@ -780,19 +803,30 @@ export const getInvoice = async (req, res) => {
     }
 
     if (!order) {
-      order = {
-        id: orderId,
-        recipientName: 'Valued Customer',
-        recipientPhone: '',
-        deliveryAddress: 'Address on record',
-        itemsSubtotal: 0,
-        addonsSubtotal: 0,
-        deliveryCharges: 0,
-        grandTotal: 0,
-        items: [],
-        paymentMethod: 'ONLINE',
-        paymentStatus: 'PAID'
-      };
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found.'
+      });
+    }
+
+    // Check ownership: caller must be admin/staff OR order owner
+    if (!req.user?.isStaff && !req.user?.isAdmin) {
+      const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
+      const callerPhone = normalizePhone(req.user?.phoneNumber || '');
+      const orderUserId = (order.userId || order.user_id || '').trim();
+      const orderPhone = normalizePhone(order.userPhone || order.user_phone || '');
+      const recipientPhone = normalizePhone(order.deliveryDetails?.recipientPhone || order.recipientPhone || order.recipient_phone || '');
+
+      const isOwner = (callerUserId && callerUserId === orderUserId) ||
+                      (callerPhone && (callerPhone === orderPhone || callerPhone === recipientPhone));
+
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You do not have permission to view this invoice.',
+          code: 'FORBIDDEN'
+        });
+      }
     }
 
     const safeId = (order.id || order.orderId || orderId).toString();
@@ -1201,11 +1235,45 @@ export const getInvoice = async (req, res) => {
 export const getOrderStatus = async (req, res) => {
   const { orderId } = req.params;
   try {
-    const docSnap = await db.collection('orders').doc(orderId).get();
+    let docSnap = await db.collection('orders').doc(orderId).get();
     if (!docSnap.exists) {
+      const qSnap = await db.collection('orders').where('orderId', '==', orderId).limit(1).get();
+      if (!qSnap.empty) {
+        docSnap = qSnap.docs[0];
+      }
+    }
+
+    if (!docSnap || !docSnap.exists) {
       return res.status(404).json({ success: false, message: 'Order not found.' });
     }
-    return res.status(200).json({ success: true, payment_status: docSnap.data().payment_status });
+
+    const orderData = docSnap.data();
+
+    // Check ownership: caller must be admin/staff OR order owner
+    if (!req.user?.isStaff && !req.user?.isAdmin) {
+      const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
+      const callerPhone = normalizePhone(req.user?.phoneNumber || '');
+      const orderUserId = (orderData.userId || orderData.user_id || '').trim();
+      const orderPhone = normalizePhone(orderData.userPhone || orderData.user_phone || '');
+      const recipientPhone = normalizePhone(orderData.deliveryDetails?.recipientPhone || orderData.recipientPhone || orderData.recipient_phone || '');
+
+      const isOwner = (callerUserId && callerUserId === orderUserId) ||
+                      (callerPhone && (callerPhone === orderPhone || callerPhone === recipientPhone));
+
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You do not have permission to view this order status.',
+          code: 'FORBIDDEN'
+        });
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      payment_status: orderData.payment_status || orderData.paymentStatus,
+      order_status: orderData.order_status || orderData.orderStatus || orderData.status
+    });
   } catch (error) {
     console.error('Error checking order status in Firestore:', error);
     return res.status(500).json({ success: false, message: 'Error checking status.' });
@@ -1443,184 +1511,220 @@ export const paymentCallback = async (req, res) => {
   }
 };
 
-// Retrieve orders (supports ?userId=... and ?userPhone=... filtering)
+/**
+ * Format raw Firestore order document into normalized order response
+ */
+export const formatOrderDocument = (doc, req) => {
+  const data = typeof doc.data === 'function' ? doc.data() : (doc || {});
+  const docId = doc.id || data.id || data.orderId || '';
+  const items = data.items || [];
+  const delDetails = data.deliveryDetails || {};
+
+  const recipientName = delDetails.recipientName || data.recipientName || data.recipient_name || data.customerName || 'Customer';
+  const recipientPhone = delDetails.recipientPhone || data.recipientPhone || data.recipient_phone || data.userPhone || '';
+  const fullAddress = delDetails.fullAddress || data.deliveryAddress || data.delivery_address || 'No Address Provided';
+
+  let calcItemsSubtotal = 0.0;
+  let calcTotalDiscount = 0.0;
+  const mappedItems = [];
+
+  items.forEach(it => {
+    const img = normalizeImageUrl(it.productImage || it.imageUrl || it.product_image || '', req);
+    const qty = parseInt(it.quantity || 1, 10);
+    const unitListingPrice = parseFloat(it.listingPrice || 0);
+    const unitOrderPrice = parseFloat(it.orderPrice || it.price || 0);
+    const itemListingPrice = parseFloat(it.itemListingPrice || it.itemSubtotalListingPrice || (unitListingPrice * qty));
+    const itemOrderPrice = parseFloat(it.itemOrderPrice || it.itemSubtotalOrderPrice || (unitOrderPrice * qty));
+    const itemTotalDiscount = parseFloat(it.itemTotalDiscount || it.discount || 0);
+
+    calcItemsSubtotal += itemListingPrice;
+    calcTotalDiscount += itemTotalDiscount;
+
+    mappedItems.push({
+      productId: it.productId || it.product_id || '',
+      productTitle: it.productTitle || it.productName || it.product_title || '',
+      productName: it.productTitle || it.productName || it.product_title || '',
+      productImage: img,
+      imageUrl: img,
+      product_image: img,
+      category: it.category || '',
+      quantity: qty,
+      listingPrice: unitListingPrice,
+      orderPrice: unitOrderPrice,
+      price: unitOrderPrice,
+      discount: parseFloat(it.discount || 0),
+      itemListingPrice: itemListingPrice,
+      itemOrderPrice: itemOrderPrice,
+      itemTotalDiscount: itemTotalDiscount,
+      cakeMessage: it.cakeMessage || null,
+    });
+
+    if (Array.isArray(it.addons) && it.addons.length > 0) {
+      it.addons.forEach(ad => {
+        const prod = (ad && typeof ad === 'object' && ad.product && typeof ad.product === 'object') ? ad.product : (ad || {});
+        const adQty = parseInt(ad.quantity || 1, 10);
+        const adPrice = parseFloat(prod.price ?? prod.salePrice ?? prod.orderPrice ?? ad.price ?? ad.orderPrice ?? 0);
+        const adListing = parseFloat(prod.listingPrice ?? prod.mrp ?? ad.listingPrice ?? ad.mrp ?? adPrice);
+        const adTitle = prod.title || prod.productTitle || prod.productName || ad.productTitle || ad.productName || 'Flower Studio Product';
+        const adRawImg = prod.imageUrl || prod.productImage || prod.image || ad.imageUrl || ad.productImage || '';
+        const adImg = normalizeImageUrl(adRawImg, req);
+        const adId = prod.id || prod.productId || ad.productId || ad.id || '';
+        const adListingPrice = adListing * adQty;
+        const adOrderPrice = adPrice * adQty;
+        const adDiscount = Math.max(0.0, adListing - adPrice);
+        const adTotalDiscount = adDiscount * adQty;
+
+        calcItemsSubtotal += adListingPrice;
+        calcTotalDiscount += adTotalDiscount;
+
+        mappedItems.push({
+          productId: adId,
+          productTitle: adTitle,
+          productName: adTitle,
+          productImage: adImg,
+          imageUrl: adImg,
+          product_image: adImg,
+          category: prod.category || 'addon',
+          quantity: adQty,
+          listingPrice: adListing,
+          orderPrice: adPrice,
+          price: adPrice,
+          discount: adDiscount,
+          itemListingPrice: adListingPrice,
+          itemOrderPrice: adOrderPrice,
+          itemTotalDiscount: adTotalDiscount,
+          cakeMessage: null,
+        });
+      });
+    }
+  });
+
+  const finalItemsSubtotal = parseFloat(data.itemsSubtotal || calcItemsSubtotal);
+  const finalTotalDiscount = parseFloat(data.totalDiscount || calcTotalDiscount);
+  const deliveryDate = delDetails.deliveryDate || data.deliveryDate || '';
+  const deliverySlot = delDetails.deliverySlot || data.deliverySlot || '';
+
+  return {
+    orderId: data.orderId || data.id || docId,
+    id: data.orderId || data.id || docId,
+    userId: data.userId || '',
+    userPhone: data.userPhone || '',
+    createdAt: data.createdAt || data.created_at || new Date().toISOString(),
+    orderStatus: data.orderStatus || data.status || data.deliveryStatus || data.delivery_status || 'PLACED',
+    paymentStatus: data.paymentStatus || data.payment_status || 'PENDING_COD',
+    paymentMethod: data.paymentMethod || data.payment_method || 'COD',
+    razorpayPaymentId: data.razorpayPaymentId || '',
+    giftMessage: data.giftMessage || data.gift_message || '',
+    itemsSubtotal: finalItemsSubtotal,
+    totalDiscount: finalTotalDiscount,
+    couponCode: data.couponCode || data.coupon_code || null,
+    couponDiscount: parseFloat(data.couponDiscount || data.coupon_discount || 0),
+    deliveryCharges: parseFloat(data.deliveryCharges || 0),
+    grandTotal: parseFloat(data.grandTotal || data.grand_total || data.totalAmount || 0),
+    customerEmail: data.customerEmail || (recipientName !== 'Customer' ? recipientName.toLowerCase().replace(/\s+/g, '') + '@example.com' : 'customer@example.com'),
+    deliveryDetails: {
+      recipientName: recipientName,
+      recipientPhone: recipientPhone,
+      fullAddress: fullAddress,
+      latitude: delDetails.latitude || null,
+      longitude: delDetails.longitude || null,
+      deliveryDate: deliveryDate,
+      deliverySlot: deliverySlot,
+    },
+    items: mappedItems
+  };
+};
+
+/**
+ * GET /api/orders
+ * Authenticated customer: retrieves own orders only
+ * Authorized staff / admin: retrieves all orders (with optional filters)
+ */
 export const getAllOrders = async (req, res) => {
   try {
-    const { userId, userPhone, phoneNumber } = req.query || {};
-    const targetPhone = (userPhone || phoneNumber || '').trim();
-    const targetUserId = (userId || '').trim();
-
+    const isStaff = Boolean(req.user?.isStaff || req.user?.isAdmin);
     let snapshot;
-    let query = db.collection('orders');
+    const query = db.collection('orders');
 
-    if (targetUserId) {
-      try {
-        snapshot = await query.where('userId', '==', targetUserId).orderBy('createdAt', 'desc').get();
-      } catch (e) {
-        snapshot = await query.where('userId', '==', targetUserId).get();
-      }
-    } else if (targetPhone) {
-      try {
-        snapshot = await query.where('userPhone', '==', targetPhone).orderBy('createdAt', 'desc').get();
-      } catch (e) {
-        snapshot = await query.where('userPhone', '==', targetPhone).get();
-      }
+    if (isStaff) {
+      // Staff / Admin: allowed to retrieve all orders with optional filtering
+      const { userId, userPhone, phoneNumber } = req.query || {};
+      const targetPhone = (userPhone || phoneNumber || '').trim();
+      const targetUserId = (userId || '').trim();
 
-      if (!snapshot || snapshot.empty) {
+      if (targetUserId) {
         try {
-          const recSnap = await db.collection('orders').where('deliveryDetails.recipientPhone', '==', targetPhone).get();
-          if (!recSnap.empty) {
-            snapshot = recSnap;
-          }
-        } catch (_) {}
+          snapshot = await query.where('userId', '==', targetUserId).orderBy('createdAt', 'desc').get();
+        } catch (_) {
+          snapshot = await query.where('userId', '==', targetUserId).get();
+        }
+      } else if (targetPhone) {
+        try {
+          snapshot = await query.where('userPhone', '==', targetPhone).orderBy('createdAt', 'desc').get();
+        } catch (_) {
+          snapshot = await query.where('userPhone', '==', targetPhone).get();
+        }
+
+        if (!snapshot || snapshot.empty) {
+          try {
+            const recSnap = await query.where('deliveryDetails.recipientPhone', '==', targetPhone).get();
+            if (!recSnap.empty) snapshot = recSnap;
+          } catch (_) {}
+        }
+      } else {
+        try {
+          snapshot = await query.orderBy('createdAt', 'desc').get();
+        } catch (_) {
+          snapshot = await query.get();
+        }
       }
     } else {
-      try {
-        snapshot = await query.orderBy('createdAt', 'desc').get();
-      } catch (e) {
-        snapshot = await query.get();
+      // Authenticated Customer: strictly isolated to own identity from verified token
+      const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
+      const callerPhone = normalizePhone(req.user?.phoneNumber || '');
+
+      if (!callerUserId && !callerPhone) {
+        return res.status(200).json({ success: true, orders: [] });
       }
+
+      const matchedDocs = new Map();
+
+      if (callerUserId) {
+        try {
+          const uSnap = await query.where('userId', '==', callerUserId).get();
+          uSnap.docs.forEach(d => matchedDocs.set(d.id, d));
+        } catch (_) {}
+      }
+
+      if (callerPhone) {
+        const phoneVariants = [callerPhone, `+91${callerPhone}`, `+91 ${callerPhone}`];
+        for (const pv of phoneVariants) {
+          try {
+            const pSnap = await query.where('userPhone', '==', pv).get();
+            pSnap.docs.forEach(d => matchedDocs.set(d.id, d));
+          } catch (_) {}
+          try {
+            const rSnap = await query.where('deliveryDetails.recipientPhone', '==', pv).get();
+            rSnap.docs.forEach(d => matchedDocs.set(d.id, d));
+          } catch (_) {}
+        }
+      }
+
+      snapshot = { docs: Array.from(matchedDocs.values()) };
     }
 
     if (!snapshot) {
       snapshot = { docs: [] };
     }
 
-    const mapped = snapshot.docs.map(doc => {
-      const data = doc.data();
-      const items = data.items || [];
-      const delDetails = data.deliveryDetails || {};
-
-      const recipientName = delDetails.recipientName || data.recipientName || data.recipient_name || data.customerName || 'Customer';
-      const recipientPhone = delDetails.recipientPhone || data.recipientPhone || data.recipient_phone || data.userPhone || '';
-      const fullAddress = delDetails.fullAddress || data.deliveryAddress || data.delivery_address || 'No Address Provided';
-
-      // Derive itemsSubtotal and totalDiscount from items array
-      let calcItemsSubtotal = 0.0;
-      let calcTotalDiscount = 0.0;
-      const mappedItems = [];
-
-      items.forEach(it => {
-        const img = normalizeImageUrl(it.productImage || it.imageUrl || it.product_image || '', req);
-        const qty = parseInt(it.quantity || 1, 10);
-        const unitListingPrice = parseFloat(it.listingPrice || 0);
-        const unitOrderPrice = parseFloat(it.orderPrice || it.price || 0);
-        // Support new names first, fall back to old names
-        const itemListingPrice = parseFloat(it.itemListingPrice || it.itemSubtotalListingPrice || (unitListingPrice * qty));
-        const itemOrderPrice = parseFloat(it.itemOrderPrice || it.itemSubtotalOrderPrice || (unitOrderPrice * qty));
-        const itemTotalDiscount = parseFloat(it.itemTotalDiscount || it.discount || 0);
-
-        calcItemsSubtotal += itemListingPrice;
-        calcTotalDiscount += itemTotalDiscount;
-
-        mappedItems.push({
-          productId: it.productId || it.product_id || '',
-          productTitle: it.productTitle || it.productName || it.product_title || '',
-          productName: it.productTitle || it.productName || it.product_title || '',
-          productImage: img,
-          imageUrl: img,
-          product_image: img,
-          category: it.category || '',
-          quantity: qty,
-          listingPrice: unitListingPrice,
-          orderPrice: unitOrderPrice,
-          price: unitOrderPrice,
-          discount: parseFloat(it.discount || 0),
-          itemListingPrice: itemListingPrice,
-          itemOrderPrice: itemOrderPrice,
-          itemTotalDiscount: itemTotalDiscount,
-          cakeMessage: it.cakeMessage || null,
-        });
-
-        // Unpack any legacy addons directly into mappedItems as regular items
-        if (Array.isArray(it.addons) && it.addons.length > 0) {
-          it.addons.forEach(ad => {
-            const prod = (ad && typeof ad === 'object' && ad.product && typeof ad.product === 'object') ? ad.product : (ad || {});
-            const adQty = parseInt(ad.quantity || 1, 10);
-            const adPrice = parseFloat(prod.price ?? prod.salePrice ?? prod.orderPrice ?? ad.price ?? ad.orderPrice ?? 0);
-            const adListing = parseFloat(prod.listingPrice ?? prod.mrp ?? ad.listingPrice ?? ad.mrp ?? adPrice);
-            const adTitle = prod.title || prod.productTitle || prod.productName || ad.productTitle || ad.productName || 'Flower Studio Product';
-            const adRawImg = prod.imageUrl || prod.productImage || prod.image || ad.imageUrl || ad.productImage || '';
-            const adImg = normalizeImageUrl(adRawImg, req);
-            const adId = prod.id || prod.productId || ad.productId || ad.id || '';
-            const adListingPrice = adListing * adQty;
-            const adOrderPrice = adPrice * adQty;
-            const adDiscount = Math.max(0.0, adListing - adPrice);
-            const adTotalDiscount = adDiscount * adQty;
-
-            calcItemsSubtotal += adListingPrice;
-            calcTotalDiscount += adTotalDiscount;
-
-            mappedItems.push({
-              productId: adId,
-              productTitle: adTitle,
-              productName: adTitle,
-              productImage: adImg,
-              imageUrl: adImg,
-              product_image: adImg,
-              category: prod.category || 'addon',
-              quantity: adQty,
-              listingPrice: adListing,
-              orderPrice: adPrice,
-              price: adPrice,
-              discount: adDiscount,
-              itemListingPrice: adListingPrice,
-              itemOrderPrice: adOrderPrice,
-              itemTotalDiscount: adTotalDiscount,
-              cakeMessage: null,
-            });
-          });
-        }
-      });
-
-      // Prefer stored values, fall back to computed
-      const finalItemsSubtotal = parseFloat(data.itemsSubtotal || calcItemsSubtotal);
-      const finalTotalDiscount = parseFloat(data.totalDiscount || calcTotalDiscount);
-
-      // Delivery date & slot — now stored in deliveryDetails
-      const deliveryDate = delDetails.deliveryDate || data.deliveryDate || '';
-      const deliverySlot = delDetails.deliverySlot || data.deliverySlot || '';
-
-      return {
-        orderId: data.orderId || data.id || doc.id,
-        id: data.orderId || data.id || doc.id,
-        userId: data.userId || '',
-        userPhone: data.userPhone || '',
-        createdAt: data.createdAt || data.created_at || new Date().toISOString(),
-        orderStatus: data.orderStatus || data.status || data.deliveryStatus || data.delivery_status || 'PLACED',
-        paymentStatus: data.paymentStatus || data.payment_status || 'PENDING_COD',
-        paymentMethod: data.paymentMethod || data.payment_method || 'COD',
-        razorpayPaymentId: data.razorpayPaymentId || '',
-        giftMessage: data.giftMessage || data.gift_message || '',
-        itemsSubtotal: finalItemsSubtotal,
-        totalDiscount: finalTotalDiscount,
-        couponCode: data.couponCode || data.coupon_code || null,
-        couponDiscount: parseFloat(data.couponDiscount || data.coupon_discount || 0),
-        deliveryCharges: parseFloat(data.deliveryCharges || 0),
-        grandTotal: parseFloat(data.grandTotal || data.grand_total || data.totalAmount || 0),
-        customerEmail: data.customerEmail || (recipientName !== 'Customer' ? recipientName.toLowerCase().replace(/\s+/g, '') + '@example.com' : 'customer@example.com'),
-        deliveryDetails: {
-          recipientName: recipientName,
-          recipientPhone: recipientPhone,
-          fullAddress: fullAddress,
-          latitude: delDetails.latitude || null,
-          longitude: delDetails.longitude || null,
-          deliveryDate: deliveryDate,
-          deliverySlot: deliverySlot,
-        },
-        items: mappedItems
-      };
-    });
+    const mapped = snapshot.docs.map(doc => formatOrderDocument(doc, req));
 
     const filteredOrders = mapped.filter((order) => {
       const pm = (order.paymentMethod || '').toLowerCase();
       const ps = (order.paymentStatus || '').toUpperCase();
       const os = (order.orderStatus || '').toUpperCase();
 
-      // Cash On Delivery orders are always valid placed orders
       if (pm === 'cod') return true;
-
-      // For online orders, omit abandoned/pending drafts
       if (ps === 'PENDING' || ps === 'PAYMENT_PENDING' || os === 'PAYMENT_PENDING') {
         return false;
       }
@@ -1634,11 +1738,72 @@ export const getAllOrders = async (req, res) => {
       orders: filteredOrders
     });
   } catch (err) {
-    console.error('Error fetching all orders for admin from Firestore:', err);
+    console.error('Error fetching order listings from Firestore:', err);
     return res.status(500).json({
       success: false,
       message: 'Failed to retrieve order listings.',
       error: err.message
+    });
+  }
+};
+
+/**
+ * GET /api/orders/:orderId
+ * Owner or authorized staff / admin only
+ * Returns 403 (or 404) if Customer A requests Customer B's order
+ */
+export const getOrderById = async (req, res) => {
+  const { orderId } = req.params;
+  try {
+    let docSnap = await db.collection('orders').doc(orderId).get();
+    if (!docSnap.exists) {
+      const qSnap = await db.collection('orders').where('orderId', '==', orderId).limit(1).get();
+      if (!qSnap.empty) {
+        docSnap = qSnap.docs[0];
+      }
+    }
+
+    if (!docSnap || !docSnap.exists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found.',
+        code: 'NOT_FOUND'
+      });
+    }
+
+    const orderData = docSnap.data();
+
+    // Enforce ownership: caller must be admin/staff OR the owner
+    if (!req.user?.isStaff && !req.user?.isAdmin) {
+      const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
+      const callerPhone = normalizePhone(req.user?.phoneNumber || '');
+
+      const orderUserId = (orderData.userId || orderData.user_id || '').trim();
+      const orderPhone = normalizePhone(orderData.userPhone || orderData.user_phone || '');
+      const recipientPhone = normalizePhone(orderData.deliveryDetails?.recipientPhone || orderData.recipientPhone || orderData.recipient_phone || '');
+
+      const isOwner = (callerUserId && callerUserId === orderUserId) ||
+                      (callerPhone && (callerPhone === orderPhone || callerPhone === recipientPhone));
+
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You do not have permission to access this order.',
+          code: 'FORBIDDEN'
+        });
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      order: formatOrderDocument(docSnap, req)
+    });
+  } catch (error) {
+    console.error('Error in getOrderById:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve order.',
+      error: error.message
     });
   }
 };
@@ -1759,7 +1924,49 @@ export const updateOrderDeliveryStatus = async (req, res) => {
 
 // --- CUSTOM ORDERS CONTROLLERS ---
 
-// Get all custom orders
+/**
+ * Format raw Firestore custom order document into normalized custom order response
+ */
+export const formatCustomOrderDocument = (doc, req) => {
+  const data = typeof doc.data === 'function' ? doc.data() : (doc || {});
+  const docId = doc.id || data.id || '';
+  let refImages = [];
+  if (Array.isArray(data.referenceImages)) {
+    refImages = data.referenceImages.map(img => normalizeImageUrl(img, req));
+  } else if (Array.isArray(data.reference_images)) {
+    refImages = data.reference_images.map(img => normalizeImageUrl(img, req));
+  }
+  const rawRefUrl = data.referenceImageUrl || data.reference_image_url || '';
+  const refUrl = rawRefUrl ? normalizeImageUrl(rawRefUrl, req) : (refImages.length > 0 ? refImages[0] : '');
+  if (refImages.length === 0 && refUrl) {
+    refImages = [refUrl];
+  }
+
+  return {
+    id: data.id || docId,
+    customerName: data.customerName || data.customer_name || '',
+    customerEmail: data.customerEmail || data.customer_email || '',
+    customerPhone: data.customerPhone || data.customer_phone || data.phone || '',
+    userId: data.userId || data.user_id || '',
+    category: data.category || '',
+    description: data.description || '',
+    referenceImageUrl: refUrl,
+    referenceImages: refImages,
+    budget: parseFloat(data.budget || 0),
+    requiredDate: data.requiredDate || data.required_date || '',
+    timeSlot: data.timeSlot || data.time_slot || '',
+    deliveryAddress: data.deliveryAddress || data.delivery_address || '',
+    status: data.status || 'Pending Review',
+    calculatedCost: data.calculatedCost !== undefined && data.calculatedCost !== null ? parseFloat(data.calculatedCost) : (data.calculated_cost !== undefined && data.calculated_cost !== null ? parseFloat(data.calculated_cost) : null),
+    requestedAt: data.requestedAt || data.created_at || new Date().toISOString()
+  };
+};
+
+/**
+ * GET /api/orders/custom/all
+ * Admin / Authorized staff only
+ * Returns all custom orders across all customers
+ */
 export const getCustomOrders = async (req, res) => {
   try {
     let snapshot;
@@ -1773,42 +1980,58 @@ export const getCustomOrders = async (req, res) => {
       snapshot = await db.collection('custom_orders').get();
     }
 
-    const mapped = snapshot.docs.map(doc => {
-      const data = doc.data();
-      let refImages = [];
-      if (Array.isArray(data.referenceImages)) {
-        refImages = data.referenceImages.map(img => normalizeImageUrl(img, req));
-      } else if (Array.isArray(data.reference_images)) {
-        refImages = data.reference_images.map(img => normalizeImageUrl(img, req));
-      }
-      const rawRefUrl = data.referenceImageUrl || data.reference_image_url || '';
-      const refUrl = rawRefUrl ? normalizeImageUrl(rawRefUrl, req) : (refImages.length > 0 ? refImages[0] : '');
-      if (refImages.length === 0 && refUrl) {
-        refImages = [refUrl];
-      }
-
-      return {
-        id: data.id || doc.id,
-        customerName: data.customerName || data.customer_name || '',
-        customerEmail: data.customerEmail || data.customer_email || '',
-        customerPhone: data.customerPhone || data.customer_phone || data.phone || '',
-        category: data.category || '',
-        description: data.description || '',
-        referenceImageUrl: refUrl,
-        referenceImages: refImages,
-        budget: parseFloat(data.budget || 0),
-        requiredDate: data.requiredDate || data.required_date || '',
-        timeSlot: data.timeSlot || data.time_slot || '',
-        deliveryAddress: data.deliveryAddress || data.delivery_address || '',
-        status: data.status || 'Pending Review',
-        calculatedCost: data.calculatedCost !== undefined && data.calculatedCost !== null ? parseFloat(data.calculatedCost) : (data.calculated_cost !== undefined && data.calculated_cost !== null ? parseFloat(data.calculated_cost) : null),
-        requestedAt: data.requestedAt || data.created_at || new Date().toISOString()
-      };
-    });
-
+    const mapped = snapshot.docs.map(doc => formatCustomOrderDocument(doc, req));
     return res.status(200).json({ success: true, customOrders: mapped });
   } catch (err) {
     console.error('Error getting custom orders from Firestore:', err);
+    return res.status(500).json({ success: false, message: 'Failed to retrieve custom orders.', error: err.message });
+  }
+};
+
+/**
+ * GET /api/orders/custom and GET /api/custom-orders
+ * Authenticated owner or authorized staff:
+ * If staff -> all custom orders
+ * If customer -> own custom orders only
+ */
+export const getCustomOrdersForCaller = async (req, res) => {
+  try {
+    const isStaff = Boolean(req.user?.isStaff || req.user?.isAdmin);
+    if (isStaff) {
+      return getCustomOrders(req, res);
+    }
+
+    // Authenticated Customer: return only own custom orders
+    const callerPhone = normalizePhone(req.user?.phoneNumber || '');
+    const callerEmail = (req.user?.email || '').trim().toLowerCase();
+    const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
+
+    if (!callerPhone && !callerEmail && !callerUserId) {
+      return res.status(200).json({ success: true, customOrders: [] });
+    }
+
+    let snapshot;
+    try {
+      snapshot = await db.collection('custom_orders').orderBy('requestedAt', 'desc').get();
+    } catch (_) {
+      snapshot = await db.collection('custom_orders').get();
+    }
+
+    const docs = snapshot.docs.filter(doc => {
+      const d = doc.data();
+      const dPhone = normalizePhone(d.customerPhone || d.customer_phone || d.phone || '');
+      const dEmail = (d.customerEmail || d.customer_email || '').trim().toLowerCase();
+      const dUser = (d.userId || d.user_id || '').trim();
+
+      return (callerPhone && dPhone && callerPhone === dPhone) ||
+             (callerEmail && dEmail && callerEmail === dEmail) ||
+             (callerUserId && dUser && callerUserId === dUser);
+    });
+
+    const mapped = docs.map(doc => formatCustomOrderDocument(doc, req));
+    return res.status(200).json({ success: true, customOrders: mapped });
+  } catch (err) {
+    console.error('Error getting custom orders for caller:', err);
     return res.status(500).json({ success: false, message: 'Failed to retrieve custom orders.', error: err.message });
   }
 };
@@ -1847,9 +2070,10 @@ export const createCustomOrder = async (req, res) => {
 
   const customOrderDoc = {
     id,
-    customerName: customerName || 'Customer',
-    customerEmail: customerEmail || '',
-    customerPhone: customerPhone || phone || '',
+    userId: req.user?.userId || req.user?.uid || '',
+    customerName: customerName || req.user?.name || 'Customer',
+    customerEmail: customerEmail || req.user?.email || '',
+    customerPhone: customerPhone || phone || req.user?.phoneNumber || '',
     category: category || 'Custom Floral Arrangement',
     description,
     referenceImageUrl: primaryRefUrl,

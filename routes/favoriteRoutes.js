@@ -4,8 +4,12 @@ import {
   toggleFavorite,
   deleteFavorite,
 } from '../controllers/favoriteController.js';
+import { requireAuth } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
+
+// All favorite operations require authenticated customer/staff identity
+router.use(requireAuth);
 
 router.get('/', getUserFavorites);
 router.post('/toggle', toggleFavorite);

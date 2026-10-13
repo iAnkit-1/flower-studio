@@ -4,15 +4,19 @@ import {
   getDeletionRequests,
   updateDeletionRequestStatus,
 } from '../controllers/accountDeletionController.js';
+import {
+  optionalAuth,
+  requireAdminOrStaff,
+} from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// Public Deletion Request Submission (Used by delete-account.html and Mobile App)
-router.post('/', requestAccountDeletion);
-router.post('/deletion-request', requestAccountDeletion);
+// Deletion Request Submission (Used by web portal delete-account.html and Mobile App)
+router.post('/', optionalAuth, requestAccountDeletion);
+router.post('/deletion-request', optionalAuth, requestAccountDeletion);
 
-// Admin Management Endpoints
-router.get('/', getDeletionRequests);
-router.patch('/:requestId', updateDeletionRequestStatus);
+// Admin Management Endpoints (Staff/Admin only)
+router.get('/', requireAdminOrStaff, getDeletionRequests);
+router.patch('/:requestId', requireAdminOrStaff, updateDeletionRequestStatus);
 
 export default router;

@@ -4,12 +4,16 @@ import {
   verifyPayment,
   handleWebhook
 } from '../controllers/orderController.js';
+import { requireAuth } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
 // Dedicated Payment Gateway Endpoints
-router.post('/create-order', createOrder);
-router.post('/verify', verifyPayment);
+// Customer order creation & verification require authentication
+router.post('/create-order', requireAuth, createOrder);
+router.post('/verify', requireAuth, verifyPayment);
+
+// Webhook from Razorpay servers (verified via HMAC SHA-256 x-razorpay-signature header)
 router.post('/webhook', handleWebhook);
 
 export default router;

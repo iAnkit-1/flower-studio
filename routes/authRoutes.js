@@ -9,6 +9,7 @@ import {
   login,
   verifyFirebaseToken
 } from '../controllers/authController.js';
+import { requireAuth } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
@@ -18,8 +19,8 @@ router.post('/send-otp', sendOtp);
 router.post('/verify-otp', verifyOtp);
 router.post('/resend-otp', resendOtp);
 router.post('/verify-firebase-token', verifyFirebaseToken);
-router.get('/profile/:phoneNumber', getUserProfile);
-router.put('/profile', updateUserProfile);
-router.post('/profile/add-order', addUserOrder);
+router.get('/profile/:phoneNumber', requireAuth, getUserProfile);
+router.put('/profile', requireAuth, updateUserProfile);
+router.post('/profile/add-order', requireAuth, addUserOrder);
 
 export default router;

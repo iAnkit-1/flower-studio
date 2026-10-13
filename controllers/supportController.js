@@ -1,8 +1,13 @@
 import db from '../config/db.js';
+import { normalizePhone } from '../middleware/authMiddleware.js';
 
-// Retrieve all support tickets with chat history from Firestore
+// Retrieve support tickets from Firestore (Staff sees all, Customer sees own)
 export const getTickets = async (req, res) => {
   try {
+    const isStaff = Boolean(req.user?.isStaff || req.user?.isAdmin);
+    const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
+    const callerPhone = normalizePhone(req.user?.phoneNumber || '');
+
     let snapshot;
     try {
       snapshot = await db.collection('support_tickets').orderBy('createdAt', 'desc').get();
@@ -10,31 +15,45 @@ export const getTickets = async (req, res) => {
       snapshot = await db.collection('support_tickets').get();
     }
 
-    const tickets = snapshot.docs.map(doc => {
+    let docs = snapshot.docs;
+
+    // Isolate customer to their own tickets only
+    if (!isStaff) {
+      docs = docs.filter((doc) => {
+        const d = doc.data();
+        const tUser = (d.userId || '').trim();
+        const tPhone = normalizePhone(d.customerPhone || '');
+        return (callerUserId && tUser && callerUserId === tUser) ||
+               (callerPhone && tPhone && callerPhone === tPhone);
+      });
+    }
+
+    const tickets = docs.map((doc) => {
       const data = doc.data();
       return {
         id: data.id || doc.id,
         customerName: data.customerName || '',
+        customerPhone: isStaff ? (data.customerPhone || '') : undefined,
         orderId: data.orderId || null,
         category: data.category || '',
         priority: data.priority || 'Medium',
         status: data.status || 'Open',
         assignedAgent: data.assignedAgent || null,
         createdAt: data.createdAt || new Date().toISOString(),
-        chatHistory: data.chatHistory || []
+        chatHistory: data.chatHistory || [],
       };
     });
 
     return res.status(200).json({
       success: true,
-      tickets
+      tickets,
     });
   } catch (err) {
     console.error('Error fetching support tickets from Firestore:', err);
     return res.status(500).json({
       success: false,
       message: 'Failed to retrieve support tickets.',
-      error: err.message
+      error: err.message,
     });
   }
 };
@@ -42,11 +61,14 @@ export const getTickets = async (req, res) => {
 // Create a new support ticket in Firestore
 export const createTicket = async (req, res) => {
   const { customerName, orderId, category, priority, message } = req.body;
+  const callerUserId = req.user?.userId || req.user?.uid || '';
+  const callerPhone = normalizePhone(req.user?.phoneNumber || '');
+  const callerName = req.user?.name || customerName;
 
-  if (!customerName || !category || !message) {
+  if (!category || !message) {
     return res.status(400).json({
       success: false,
-      message: 'Missing required support ticket fields.'
+      message: 'Missing required support ticket fields (category, message).',
     });
   }
 
@@ -54,7 +76,9 @@ export const createTicket = async (req, res) => {
 
   const newTicket = {
     id: ticketId,
-    customerName,
+    customerName: callerName || 'Customer',
+    customerPhone: callerPhone,
+    userId: callerUserId,
     orderId: orderId || null,
     category,
     priority: priority || 'Medium',
@@ -65,9 +89,9 @@ export const createTicket = async (req, res) => {
       {
         sender: 'Customer',
         message: message,
-        timestamp: new Date().toISOString()
-      }
-    ]
+        timestamp: new Date().toISOString(),
+      },
+    ],
   };
 
   try {
@@ -215,9 +239,28 @@ export const sendChatMessage = async (req, res) => {
       });
     }
 
-    const currentHistory = docSnap.data().chatHistory || [];
+    const ticketData = docSnap.data();
+    const isStaff = Boolean(req.user?.isStaff || req.user?.isAdmin);
+
+    if (!isStaff) {
+      const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
+      const callerPhone = normalizePhone(req.user?.phoneNumber || '');
+      const tUser = (ticketData.userId || '').trim();
+      const tPhone = normalizePhone(ticketData.customerPhone || '');
+      const isOwner = (callerUserId && tUser && callerUserId === tUser) ||
+                      (callerPhone && tPhone && callerPhone === tPhone);
+
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You do not have permission to message in this ticket.',
+        });
+      }
+    }
+
+    const currentHistory = ticketData.chatHistory || [];
     const newMessage = {
-      sender,
+      sender: isStaff ? (sender || 'Agent') : 'Customer',
       message,
       timestamp: new Date().toISOString()
     };
