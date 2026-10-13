@@ -1,5 +1,6 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import db, { admin } from '../config/db.js';
+import { findUserDoc } from './reminderController.js';
 
 const GOOGLE_JWKS = createRemoteJWKSet(
   new URL('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com')
@@ -74,6 +75,8 @@ export const verifyFirebaseToken = async (req, res) => {
         pincode: '',
         addressType: 'Home'
       },
+      addresses: [],
+      reminders: [],
       orders: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -159,11 +162,16 @@ export const getUserProfile = async (req, res) => {
 
   try {
     if (db) {
-      const userSnap = await db.collection('users').doc(cleanPhone).get();
-      if (userSnap.exists) {
+      const userDocInfo = await findUserDoc(cleanPhone, cleanPhone);
+      if (userDocInfo && userDocInfo.data) {
+        const data = userDocInfo.data;
         return res.status(200).json({
           success: true,
-          user: userSnap.data()
+          user: {
+            ...data,
+            addresses: Array.isArray(data.addresses) ? data.addresses : [],
+            reminders: Array.isArray(data.reminders) ? data.reminders : [],
+          }
         });
       }
     }
@@ -184,6 +192,8 @@ export const getUserProfile = async (req, res) => {
           pincode: '',
           addressType: 'Home'
         },
+        addresses: [],
+        reminders: [],
         orders: []
       }
     });
@@ -199,7 +209,7 @@ export const getUserProfile = async (req, res) => {
 };
 
 /**
- * 3. Update User Profile and Address in Firestore
+ * 3. Update User Profile, Address and Reminders in Firestore
  */
 export const updateUserProfile = async (req, res) => {
   const {
@@ -214,7 +224,8 @@ export const updateUserProfile = async (req, res) => {
     state,
     pincode,
     addressType,
-    addresses
+    addresses,
+    reminders
   } = req.body;
 
   const cleanPhone = (phoneNumber || '').trim();
@@ -249,13 +260,17 @@ export const updateUserProfile = async (req, res) => {
   if (Array.isArray(addresses)) {
     profilePayload.addresses = addresses;
   }
+  if (Array.isArray(reminders)) {
+    profilePayload.reminders = reminders;
+  }
 
   try {
     if (db) {
-      const userRef = db.collection('users').doc(targetId);
-      const userSnap = await userRef.get();
+      const userDocInfo = await findUserDoc(userId, cleanPhone);
+      const userRef = userDocInfo?.ref || db.collection('users').doc(targetId);
+      const userSnap = userDocInfo?.snap || (await userRef.get());
 
-      if (userSnap.exists) {
+      if (userSnap && userSnap.exists) {
         const currentData = userSnap.data();
         profilePayload = {
           ...currentData,
@@ -271,9 +286,14 @@ export const updateUserProfile = async (req, res) => {
         if (Array.isArray(addresses)) {
           profilePayload.addresses = addresses;
         }
+        if (Array.isArray(reminders)) {
+          profilePayload.reminders = reminders;
+        }
         await userRef.update(profilePayload);
       } else {
         profilePayload.orders = [];
+        profilePayload.addresses = Array.isArray(addresses) ? addresses : [];
+        profilePayload.reminders = Array.isArray(reminders) ? reminders : [];
         profilePayload.createdAt = new Date().toISOString();
         await userRef.set(profilePayload);
       }
