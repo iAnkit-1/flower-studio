@@ -227,12 +227,11 @@ export const createOrder = async (req, res) => {
       success: true,
       message: 'Razorpay order created successfully.',
       orderId: orderId,
-      razorpayOrderId: razorpayOrderId || `order_sim_${Date.now()}`,
+      razorpayOrderId: razorpayOrderId,
       amount: amountInPaise,
       currency: 'INR',
       keyId: process.env.RAZORPAY_KEY_ID || 'rzp_live_TlTZMHvnMnXHGZ',
       grandTotal: finalGrandTotal,
-      isSimulated: !razorpayOrderId,
     });
 
   } catch (error) {
@@ -315,9 +314,7 @@ export const verifyPayment = async (req, res) => {
     const rzpOrderId = razorpay_order_id || order.razorpayOrderId || order.razorpay_order_id;
     const isDev = process.env.NODE_ENV !== 'production';
 
-    if ((isSimulated || razorpay_signature === 'simulated_signature_ok') && isDev) {
-      isSigValid = true;
-    } else if (rzpOrderId && razorpay_payment_id && razorpay_signature) {
+    if (rzpOrderId && razorpay_payment_id && razorpay_signature) {
       const dataToVerify = `${rzpOrderId}|${razorpay_payment_id}`;
       const generatedSignature = crypto
         .createHmac('sha256', keySecret)

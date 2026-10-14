@@ -380,12 +380,11 @@ export const createCustomerSubscriptionOrder = async (req, res) => {
       success: true,
       message: 'Subscription order initiated.',
       subscriptionId: subId,
-      razorpayOrderId: razorpayOrderId || `sub_sim_${Date.now()}`,
+      razorpayOrderId: razorpayOrderId,
       amount: amountInPaise,
       currency: 'INR',
       keyId: process.env.RAZORPAY_KEY_ID || 'rzp_live_TlTZMHvnMnXHGZ',
       grandTotal: planPrice,
-      isSimulated: !razorpayOrderId,
       subscription: subscriptionDoc,
     });
   } catch (err) {
@@ -446,9 +445,7 @@ export const verifyCustomerSubscriptionPayment = async (req, res) => {
     const keySecret = process.env.RAZORPAY_KEY_SECRET || '37HQJoRCjVLSG8uf4FzaR3pQ';
     const rzpOrderId = razorpay_order_id || subData.razorpayOrderId;
 
-    if (isSimulated || razorpay_signature === 'simulated_signature_ok') {
-      isValid = true;
-    } else if (rzpOrderId && razorpay_payment_id && razorpay_signature) {
+    if (rzpOrderId && razorpay_payment_id && razorpay_signature) {
       const generatedSignature = crypto
         .createHmac('sha256', keySecret)
         .update(`${rzpOrderId}|${razorpay_payment_id}`)
