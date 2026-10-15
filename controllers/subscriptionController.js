@@ -383,7 +383,7 @@ export const createCustomerSubscriptionOrder = async (req, res) => {
       razorpayOrderId: razorpayOrderId,
       amount: amountInPaise,
       currency: 'INR',
-      keyId: process.env.RAZORPAY_KEY_ID || 'rzp_live_TlTZMHvnMnXHGZ',
+      keyId: process.env.RAZORPAY_KEY_ID || 'rzp_live_Tlujw9WTMvsKVD',
       grandTotal: planPrice,
       subscription: subscriptionDoc,
     });
@@ -442,7 +442,7 @@ export const verifyCustomerSubscriptionPayment = async (req, res) => {
     }
 
     let isValid = false;
-    const keySecret = process.env.RAZORPAY_KEY_SECRET || '37HQJoRCjVLSG8uf4FzaR3pQ';
+    const keySecret = process.env.RAZORPAY_KEY_SECRET || '7ewgdIzkFSzl7CPRbg32UNmq';
     const rzpOrderId = razorpay_order_id || subData.razorpayOrderId;
 
     if (rzpOrderId && razorpay_payment_id && razorpay_signature) {
@@ -479,7 +479,7 @@ export const verifyCustomerSubscriptionPayment = async (req, res) => {
       if (pendingSnap.exists) {
         await pendingDocRef.delete();
       }
-    } catch (_) {}
+    } catch (_) { }
 
     // Record in orders collection so it seamlessly displays in user's "My Orders"
     try {

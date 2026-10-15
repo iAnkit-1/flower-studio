@@ -94,7 +94,7 @@ export const createOrder = async (req, res) => {
     const deliveryTotalVal = parseFloat(delivery_total || 0.0);
     const couponCode = req.body.couponCode || req.body.coupon_code || null;
     const couponDiscountVal = parseFloat(req.body.couponDiscount || req.body.coupon_discount || 0.0);
-    
+
     // Server-calculated grand total
     const computedGrandTotal = Math.max(0.0, validatedSubtotal + deliveryTotalVal - couponDiscountVal);
     const finalGrandTotal = computedGrandTotal > 0 ? computedGrandTotal : parseFloat(grand_total || 0.0);
@@ -105,23 +105,23 @@ export const createOrder = async (req, res) => {
 
     const deliveryDetailsObj = req.body.deliveryDetails && typeof req.body.deliveryDetails === 'object'
       ? {
-          fullAddress: req.body.deliveryDetails.fullAddress || delivery_address,
-          latitude: parseFloat(req.body.deliveryDetails.latitude || req.body.latitude || 25.9207997),
-          longitude: parseFloat(req.body.deliveryDetails.longitude || req.body.longitude || 82.2026451),
-          recipientName: req.body.deliveryDetails.recipientName || recipient_name,
-          recipientPhone: req.body.deliveryDetails.recipientPhone || recipient_phone,
-          deliveryDate: req.body.deliveryDetails.deliveryDate || globalDeliveryDate,
-          deliverySlot: req.body.deliveryDetails.deliverySlot || globalDeliverySlot,
-        }
+        fullAddress: req.body.deliveryDetails.fullAddress || delivery_address,
+        latitude: parseFloat(req.body.deliveryDetails.latitude || req.body.latitude || 25.9207997),
+        longitude: parseFloat(req.body.deliveryDetails.longitude || req.body.longitude || 82.2026451),
+        recipientName: req.body.deliveryDetails.recipientName || recipient_name,
+        recipientPhone: req.body.deliveryDetails.recipientPhone || recipient_phone,
+        deliveryDate: req.body.deliveryDetails.deliveryDate || globalDeliveryDate,
+        deliverySlot: req.body.deliveryDetails.deliverySlot || globalDeliverySlot,
+      }
       : {
-          fullAddress: delivery_address,
-          latitude: parseFloat(req.body.latitude || 25.9207997),
-          longitude: parseFloat(req.body.longitude || 82.2026451),
-          recipientName: recipient_name,
-          recipientPhone: recipient_phone,
-          deliveryDate: globalDeliveryDate,
-          deliverySlot: globalDeliverySlot,
-        };
+        fullAddress: delivery_address,
+        latitude: parseFloat(req.body.latitude || 25.9207997),
+        longitude: parseFloat(req.body.longitude || 82.2026451),
+        recipientName: recipient_name,
+        recipientPhone: recipient_phone,
+        deliveryDate: globalDeliveryDate,
+        deliverySlot: globalDeliverySlot,
+      };
 
     const isCod = (payment_method || '').toLowerCase() === 'cod';
 
@@ -230,7 +230,7 @@ export const createOrder = async (req, res) => {
       razorpayOrderId: razorpayOrderId,
       amount: amountInPaise,
       currency: 'INR',
-      keyId: process.env.RAZORPAY_KEY_ID || 'rzp_live_TlTZMHvnMnXHGZ',
+      keyId: process.env.RAZORPAY_KEY_ID || 'rzp_live_Tlujw9WTMvsKVD',
       grandTotal: finalGrandTotal,
     });
 
@@ -298,7 +298,7 @@ export const verifyPayment = async (req, res) => {
       const orderPhone = normalizePhone(order.userPhone || order.user_phone || order.recipientPhone || order.recipient_phone || '');
 
       const isOwner = (callerUserId && callerUserId === orderUserId) ||
-                      (callerPhone && callerPhone === orderPhone);
+        (callerPhone && callerPhone === orderPhone);
 
       if (!isOwner && (orderUserId || orderPhone)) {
         return res.status(403).json({
@@ -310,7 +310,7 @@ export const verifyPayment = async (req, res) => {
 
     // 3. Verify Signature
     let isSigValid = false;
-    const keySecret = process.env.RAZORPAY_KEY_SECRET || '37HQJoRCjVLSG8uf4FzaR3pQ';
+    const keySecret = process.env.RAZORPAY_KEY_SECRET || '7ewgdIzkFSzl7CPRbg32UNmq';
     const rzpOrderId = razorpay_order_id || order.razorpayOrderId || order.razorpay_order_id;
     const isDev = process.env.NODE_ENV !== 'production';
 
@@ -360,7 +360,7 @@ export const verifyPayment = async (req, res) => {
       if (pendingSnap.exists) {
         await pendingDocRef.delete();
       }
-    } catch (_) {}
+    } catch (_) { }
 
     console.log(`Order ${orderId} verified and successfully stored in orders collection!`);
     return res.status(200).json({
@@ -815,7 +815,7 @@ export const getInvoice = async (req, res) => {
       const recipientPhone = normalizePhone(order.deliveryDetails?.recipientPhone || order.recipientPhone || order.recipient_phone || '');
 
       const isOwner = (callerUserId && callerUserId === orderUserId) ||
-                      (callerPhone && (callerPhone === orderPhone || callerPhone === recipientPhone));
+        (callerPhone && (callerPhone === orderPhone || callerPhone === recipientPhone));
 
       if (!isOwner) {
         return res.status(403).json({
@@ -1255,7 +1255,7 @@ export const getOrderStatus = async (req, res) => {
       const recipientPhone = normalizePhone(orderData.deliveryDetails?.recipientPhone || orderData.recipientPhone || orderData.recipient_phone || '');
 
       const isOwner = (callerUserId && callerUserId === orderUserId) ||
-                      (callerPhone && (callerPhone === orderPhone || callerPhone === recipientPhone));
+        (callerPhone && (callerPhone === orderPhone || callerPhone === recipientPhone));
 
       if (!isOwner) {
         return res.status(403).json({
@@ -1666,7 +1666,7 @@ export const getAllOrders = async (req, res) => {
           try {
             const recSnap = await query.where('deliveryDetails.recipientPhone', '==', targetPhone).get();
             if (!recSnap.empty) snapshot = recSnap;
-          } catch (_) {}
+          } catch (_) { }
         }
       } else {
         try {
@@ -1690,7 +1690,7 @@ export const getAllOrders = async (req, res) => {
         try {
           const uSnap = await query.where('userId', '==', callerUserId).get();
           uSnap.docs.forEach(d => matchedDocs.set(d.id, d));
-        } catch (_) {}
+        } catch (_) { }
       }
 
       if (callerPhone) {
@@ -1699,11 +1699,11 @@ export const getAllOrders = async (req, res) => {
           try {
             const pSnap = await query.where('userPhone', '==', pv).get();
             pSnap.docs.forEach(d => matchedDocs.set(d.id, d));
-          } catch (_) {}
+          } catch (_) { }
           try {
             const rSnap = await query.where('deliveryDetails.recipientPhone', '==', pv).get();
             rSnap.docs.forEach(d => matchedDocs.set(d.id, d));
-          } catch (_) {}
+          } catch (_) { }
         }
       }
 
@@ -1780,7 +1780,7 @@ export const getOrderById = async (req, res) => {
       const recipientPhone = normalizePhone(orderData.deliveryDetails?.recipientPhone || orderData.recipientPhone || orderData.recipient_phone || '');
 
       const isOwner = (callerUserId && callerUserId === orderUserId) ||
-                      (callerPhone && (callerPhone === orderPhone || callerPhone === recipientPhone));
+        (callerPhone && (callerPhone === orderPhone || callerPhone === recipientPhone));
 
       if (!isOwner) {
         return res.status(403).json({
@@ -2021,8 +2021,8 @@ export const getCustomOrdersForCaller = async (req, res) => {
       const dUser = (d.userId || d.user_id || '').trim();
 
       return (callerPhone && dPhone && callerPhone === dPhone) ||
-             (callerEmail && dEmail && callerEmail === dEmail) ||
-             (callerUserId && dUser && callerUserId === dUser);
+        (callerEmail && dEmail && callerEmail === dEmail) ||
+        (callerUserId && dUser && callerUserId === dUser);
     });
 
     const mapped = docs.map(doc => formatCustomOrderDocument(doc, req));
