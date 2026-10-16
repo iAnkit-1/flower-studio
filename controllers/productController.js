@@ -7,10 +7,76 @@ const MAX_IMAGES = 5;
 
 export const extractImageFileName = (url) => {
   if (typeof url !== 'string' || !url) return '';
-  if (url.startsWith('data:image') || url.startsWith('blob:')) return url;
+  if (url.startsWith('data:image') || url.startsWith('blob:') || url.startsWith('data:application')) return '';
   const clean = url.split('?')[0].trim();
   const filename = clean.split('/').pop();
   return filename;
+};
+
+/**
+ * Ensures any image input (pure filename, CDN URL, external URL, or base64 data URL)
+ * is safely stored as a pure filename or valid external URL, uploading base64 data to R2.
+ */
+export const processImageToFileName = async (img, folder = 'product-images') => {
+  if (!img || typeof img !== 'string') return '';
+  const trimmed = img.trim();
+
+  // 1. If it's a data URL / base64 string, upload directly to R2 and return the generated filename!
+  if (trimmed.startsWith('data:image') || trimmed.startsWith('data:application')) {
+    try {
+      const cleanBase64 = trimmed.includes(',') ? trimmed.split(',')[1] : trimmed;
+      const buffer = Buffer.from(cleanBase64, 'base64');
+      const mimeMatch = trimmed.match(/^data:([^;]+);base64/);
+      const contentType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+      const cleanExt = contentType.split('/')[1] === 'jpeg' ? 'jpg' : (contentType.split('/')[1] || 'jpg');
+
+      const timestamp = Date.now();
+      const randomSuffix = Math.random().toString(36).substring(2, 8);
+      const isSubFolder = folder === 'subscription-plans' || folder === 'subscription_plans';
+      const isCustomFolder = folder === 'custom-orders' || folder === 'custom_orders';
+      const targetFolder = isSubFolder
+        ? 'subscription-plans'
+        : (isCustomFolder ? 'custom-orders' : (R2_FOLDER || 'product-images'));
+      const prefix = isSubFolder ? 'sub' : (isCustomFolder ? 'order' : 'prod');
+      const filename = `${prefix}_${timestamp}_${randomSuffix}.${cleanExt}`;
+      const key = `${targetFolder}/${filename}`;
+
+      await r2Client.send(new PutObjectCommand({
+        Bucket: BUCKET_NAME,
+        Key: key,
+        Body: buffer,
+        ContentType: contentType,
+      }));
+
+      return filename;
+    } catch (uploadErr) {
+      console.error('Failed to auto-upload base64 image to R2:', uploadErr);
+      return '';
+    }
+  }
+
+  // 2. If already a pure filename or relative path
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    const clean = trimmed.split('?')[0].trim();
+    const filename = clean.split('/').pop();
+    return filename;
+  }
+
+  // 3. If full CDN URL or R2 URL, extract pure filename
+  const clean = trimmed.split('?')[0].trim();
+  const filename = clean.split('/').pop();
+  if (
+    trimmed.includes('cdn.flowerstudiobypushpraj.com') ||
+    trimmed.includes('.r2.cloudflarestorage.com') ||
+    filename.startsWith('prod_') ||
+    filename.startsWith('sub_') ||
+    filename.startsWith('order_')
+  ) {
+    return filename;
+  }
+
+  // External link (like unsplash placeholder)
+  return trimmed;
 };
 
 /**
@@ -330,9 +396,11 @@ export const createProduct = async (req, res) => {
     });
   }
 
-  const cleanImageNames = (images || [])
-    .map(extractImageFileName)
-    .filter(Boolean);
+  const cleanImageNames = (
+    await Promise.all(
+      (images || []).map((img) => processImageToFileName(img, 'product-images'))
+    )
+  ).filter(Boolean);
 
   const productId =
     id ||
@@ -872,9 +940,11 @@ export const updateProduct = async (req, res) => {
         ? images
         : existingData.images || [];
 
-    const finalImages = rawImages
-      .map(extractImageFileName)
-      .filter(Boolean);
+    const finalImages = (
+      await Promise.all(
+        rawImages.map((img) => processImageToFileName(img, 'product-images'))
+      )
+    ).filter(Boolean);
 
     const updatedData = {
       hsnCode:
