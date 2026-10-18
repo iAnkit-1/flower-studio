@@ -1480,11 +1480,11 @@ export const updateOrderStatus = async (req, res) => {
 
     const updatedSnap = await docRef.get();
 
-    // Trigger Customer Push Notification for Order Status Update
+    // Trigger Customer Push Notification for Order Status Update (sent ONLY to order owner)
     sendCustomerOrderStatusAlert({
       orderId,
-      customerUserId: existingData.userId || existingData.user_id,
-      customerPhone: existingData.recipient_phone || existingData.recipientPhone || existingData.customerPhone || existingData.phone,
+      customerUserId: existingData.userId || existingData.user_id || existingData.customerId || existingData.customer_id,
+      customerPhone: existingData.userPhone || existingData.user_phone || existingData.recipient_phone || existingData.recipientPhone || existingData.customerPhone || existingData.phone,
       status: targetStatus,
     }).catch((e) => console.warn('[updateOrderStatus Customer Alert Notice]:', e.message));
 
@@ -1554,12 +1554,12 @@ export const updateOrderDeliveryStatus = async (req, res) => {
     await docRef.update({ orderStatus: newStatus });
     const updatedSnap = await docRef.get();
 
-    // Trigger Customer Push Notification for Delivery Status Update
+    // Trigger Customer Push Notification for Delivery Status Update (sent ONLY to order owner)
     const currentOrderData = docSnap.data() || {};
     sendCustomerOrderStatusAlert({
       orderId,
-      customerUserId: currentOrderData.userId || currentOrderData.user_id,
-      customerPhone: currentOrderData.recipient_phone || currentOrderData.recipientPhone || currentOrderData.customerPhone || currentOrderData.phone,
+      customerUserId: currentOrderData.userId || currentOrderData.user_id || currentOrderData.customerId || currentOrderData.customer_id,
+      customerPhone: currentOrderData.userPhone || currentOrderData.user_phone || currentOrderData.recipient_phone || currentOrderData.recipientPhone || currentOrderData.customerPhone || currentOrderData.phone,
       status: newStatus,
     }).catch((e) => console.warn('[updateOrderDeliveryStatus Customer Alert Notice]:', e.message));
 
