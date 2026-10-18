@@ -1,6 +1,6 @@
-// Static images located under /assets
-const LOGO_SRC = '/assets/logo.png';
-const SIGNATURE_SRC = '/assets/signature.png';
+// CDN image links for receipt branding and authorized signature
+const LOGO_SRC = 'https://cdn.flowerstudiobypushpraj.com/assets/logo.png';
+const SIGNATURE_SRC = 'https://cdn.flowerstudiobypushpraj.com/assets/signature.jpg';
 
 /**
  * Format date in IST (Asia/Kolkata) as dd-mm-yyyy

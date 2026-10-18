@@ -2,8 +2,6 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
-import path from 'path';
-import fs from 'fs';
 import { httpServerHandler } from 'cloudflare:node';
 
 import productRoutes           from './routes/productRoutes.js';
@@ -144,25 +142,6 @@ app.use('/api/subscriptions',            subscriptionRoutes);
 app.use('/api/notify-items',             notifyRoutes);
 app.use('/api/notify',                   notifyRoutes);
 app.use('/api/notifications',            notificationRoutes);
-
-// Static assets route for receipts and branding (/assets/logo.png, /assets/signature.png)
-app.use('/assets', express.static(path.resolve(process.cwd(), 'assets')));
-app.get('/assets/:filename', (req, res) => {
-  try {
-    const filename = req.params.filename;
-    const filePath = path.resolve(process.cwd(), 'assets', filename);
-    if (fs.existsSync(filePath)) {
-      const ext = path.extname(filename).toLowerCase();
-      const mime = ext === '.png' ? 'image/png' : (ext === '.jpg' || ext === '.jpeg') ? 'image/jpeg' : 'application/octet-stream';
-      res.setHeader('Content-Type', mime);
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      return res.send(fs.readFileSync(filePath));
-    }
-  } catch (err) {
-    console.warn('[Assets Route warning]:', err.message);
-  }
-  res.status(404).send('Asset not found');
-});
 
 // Organization routes (Custom JWT)
 app.use('/api/org/auth', orgAuthRoutes);
