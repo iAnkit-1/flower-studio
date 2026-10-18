@@ -726,6 +726,16 @@ async function _updateOrderInFirestoreByRzpId(razorpayOrderId, updatePayload) {
       // Stock deduction on confirmation / payment capture
       if (updatePayload.orderStatus === 'CONFIRMED' || updatePayload.paymentStatus === 'PAID') {
         await _deductOrderStock(doc.ref, data.items, data);
+
+        // Staff order alert for confirmed online order
+        sendStaffOrderAlert({
+          orderId: doc.id,
+          customerName: data.recipient_name || data.recipientName || data.customerName || 'Customer',
+          customerPhone: data.recipient_phone || data.recipientPhone || '',
+          grandTotal: data.grand_total || data.grandTotal || 0,
+          paymentMethod: 'ONLINE',
+          itemsCount: (data.items || []).length,
+        }).catch((e) => console.warn('[Webhook Staff Alert Notice]:', e.message));
       } else if (updatePayload.orderStatus === 'CANCELLED' || updatePayload.paymentStatus === 'REFUNDED') {
         await _restoreOrderStock(doc.ref, data.items, data);
       }
