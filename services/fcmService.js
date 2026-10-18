@@ -276,6 +276,113 @@ export async function sendStaffOrderAlert({
 }
 
 /**
+ * Send Staff Support Ticket Alert (Org Web and Organization App)
+ */
+export async function sendStaffSupportAlert({
+  ticketId,
+  customerName = 'Valued Customer',
+  customerPhone = '',
+  orderId = '',
+  category = 'Support Request',
+  message = '',
+  priority = 'MID',
+}) {
+  const title = `🎧 NEW SUPPORT TICKET: #${ticketId}`;
+  const orderSnippet = orderId ? ` (Order #${orderId})` : '';
+  const body = `${customerName}${orderSnippet}: [${category}] ${message.slice(0, 100)}`;
+  const now = new Date().toISOString();
+
+  // Save to notifications collection in Firestore so Org Web displays it in real-time
+  try {
+    await db.collection('notifications').doc(`notif_tkt_${ticketId}`).set({
+      type: 'SUPPORT_TICKET',
+      ticketId: String(ticketId),
+      orderId: orderId ? String(orderId) : null,
+      title,
+      body,
+      customerName,
+      customerPhone,
+      category,
+      priority,
+      isRead: false,
+      soundType: 'ding',
+      createdAt: now,
+      updatedAt: now,
+    });
+    console.log(`[Notification Service] Saved new support ticket notification in Firestore: #${ticketId}`);
+  } catch (fsErr) {
+    console.error('[Notification Service] Error saving ticket notification to Firestore:', fsErr.message);
+  }
+
+  // 1. Send to topic 'organization_alerts'
+  try {
+    await sendFcmMessage({
+      topic: 'organization_alerts',
+      notification: { title, body },
+      data: {
+        ticketId: String(ticketId),
+        orderId: orderId ? String(orderId) : '',
+        type: 'SUPPORT_TICKET',
+        category: String(category),
+        priority: String(priority),
+        click_action: '/support',
+      },
+      android: {
+        priority: 'high',
+        notification: {
+          channel_id: 'flower_studio_support_channel',
+          default_vibrate_timings: true,
+        },
+      },
+      apns: {
+        payload: {
+          aps: {
+            badge: 1,
+            sound: 'default',
+          },
+        },
+      },
+    });
+    console.log(`[FCM Service] Staff Support Alert sent to topic 'organization_alerts'`);
+  } catch (fcmErr) {
+    console.warn('[FCM Service] Notice sending to topic organization_alerts for support ticket:', fcmErr.message);
+  }
+
+  // 2. Also send directly to active staff tokens in staff_devices
+  try {
+    const staffSnaps = await db.collection('staff_devices').limit(50).get();
+    const staffTokens = [];
+    staffSnaps.forEach((doc) => {
+      const d = doc.data();
+      if (d.fcmToken) staffTokens.push(d.fcmToken);
+      if (Array.isArray(d.fcmTokens)) staffTokens.push(...d.fcmTokens);
+    });
+
+    const uniqueTokens = [...new Set(staffTokens)].filter(Boolean);
+    if (uniqueTokens.length > 0) {
+      await Promise.allSettled(
+        uniqueTokens.map((t) =>
+          sendFcmMessage({
+            token: t,
+            notification: { title, body },
+            data: {
+              ticketId: String(ticketId),
+              orderId: orderId ? String(orderId) : '',
+              type: 'SUPPORT_TICKET',
+              category: String(category),
+              priority: String(priority),
+              click_action: '/support',
+            },
+          })
+        )
+      );
+    }
+  } catch (multiErr) {
+    console.warn('[FCM Service] Notice sending direct staff notifications for ticket:', multiErr.message);
+  }
+}
+
+/**
  * 2. Send Customer Order Status Update Push Notification
  * CRITICAL RULE: Targets ONLY the specific order owner who placed the order!
  */
