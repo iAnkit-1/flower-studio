@@ -105,11 +105,16 @@ export const createOrder = async (req, res) => {
     const globalDeliveryDate = req.body.deliveryDate || req.body.delivery_date || firstItem.deliveryDate || firstItem.delivery_date || new Date().toISOString();
     const globalDeliverySlot = req.body.deliverySlot || req.body.delivery_slot || firstItem.deliverySlot || firstItem.delivery_slot || 'Standard Delivery';
 
+    const rawLat = req.body.deliveryDetails?.latitude ?? req.body.latitude;
+    const rawLng = req.body.deliveryDetails?.longitude ?? req.body.longitude;
+    const parsedLat = (rawLat !== undefined && rawLat !== null && !isNaN(parseFloat(rawLat))) ? parseFloat(rawLat) : null;
+    const parsedLng = (rawLng !== undefined && rawLng !== null && !isNaN(parseFloat(rawLng))) ? parseFloat(rawLng) : null;
+
     const deliveryDetailsObj = req.body.deliveryDetails && typeof req.body.deliveryDetails === 'object'
       ? {
         fullAddress: req.body.deliveryDetails.fullAddress || delivery_address,
-        latitude: parseFloat(req.body.deliveryDetails.latitude || req.body.latitude || 25.9207997),
-        longitude: parseFloat(req.body.deliveryDetails.longitude || req.body.longitude || 82.2026451),
+        latitude: parsedLat,
+        longitude: parsedLng,
         recipientName: req.body.deliveryDetails.recipientName || recipient_name,
         recipientPhone: req.body.deliveryDetails.recipientPhone || recipient_phone,
         deliveryDate: req.body.deliveryDetails.deliveryDate || globalDeliveryDate,
@@ -117,8 +122,8 @@ export const createOrder = async (req, res) => {
       }
       : {
         fullAddress: delivery_address,
-        latitude: parseFloat(req.body.latitude || 25.9207997),
-        longitude: parseFloat(req.body.longitude || 82.2026451),
+        latitude: parsedLat,
+        longitude: parsedLng,
         recipientName: recipient_name,
         recipientPhone: recipient_phone,
         deliveryDate: globalDeliveryDate,
@@ -168,6 +173,8 @@ export const createOrder = async (req, res) => {
       deliveryAddress: delivery_address,
       delivery_address: delivery_address,
       deliveryDetails: deliveryDetailsObj,
+      latitude: parsedLat,
+      longitude: parsedLng,
       giftMessage: gift_message || null,
       gift_message: gift_message || null,
       itemsSubtotal: validatedListingSubtotal,

@@ -115,8 +115,8 @@ export function generateReceiptHtml(order = {}) {
     order.delivery_address ||
     'Address on record';
 
-  const paymentMethod = (order.paymentMethod || order.payment_method || 'ONLINE').toString().toUpperCase();
-  const paymentStatus = (order.paymentStatus || order.payment_status || 'PAID').toString().toUpperCase();
+  const paymentMethod = (order.paymentMethod || order.payment_method || '').toString().toUpperCase();
+  const paymentStatus = (order.paymentStatus || order.payment_status || '').toString().toUpperCase();
 
   const items = Array.isArray(order.items) ? order.items : [];
 
@@ -125,7 +125,7 @@ export function generateReceiptHtml(order = {}) {
   let computedItemsSubtotal = 0;
 
   if (items.length === 0) {
-    const singlePrice = parseFloat(order.grandTotal || order.grand_total || 0);
+    const singlePrice = parseFloat(order.itemsSubtotal || order.items_subtotal);
     computedItemsSubtotal = singlePrice;
     tableRows = `
       <tr>
@@ -203,14 +203,15 @@ export function generateReceiptHtml(order = {}) {
   const deliveryCharges = parseFloat(
     order.deliveryCharges ?? order.delivery_charges ?? order.delivery_total ?? order.deliveryTotal ?? 0
   );
+  const totalDiscount = parseFloat(order.totalDiscount ?? order.total_discount ?? 0);
   const couponDiscount = parseFloat(order.couponDiscount ?? order.coupon_discount ?? 0);
   const couponCode = (order.couponCode || order.coupon_code || '').trim();
 
   let grandTotal = parseFloat(
-    order.grandTotal ?? order.grand_total ?? order.totalAmount ?? (computedItemsSubtotal + deliveryCharges - couponDiscount)
+    order.grandTotal ?? order.grand_total ?? (computedItemsSubtotal + deliveryCharges - totalDiscount - couponDiscount)
   );
   if (grandTotal <= 0 && computedItemsSubtotal > 0) {
-    grandTotal = computedItemsSubtotal + deliveryCharges - couponDiscount;
+    grandTotal = computedItemsSubtotal + deliveryCharges - totalDiscount - couponDiscount;
   }
 
   const amountInWords = numberToWordsINR(grandTotal);
@@ -728,9 +729,15 @@ export function generateReceiptHtml(order = {}) {
           <td><span style="color: #16a34a; font-weight: 600;">FREE</span></td>
         </tr>
         `}
+        ${totalDiscount > 0 ? `
+        <tr class="discount-row">
+          <td>Discount:</td>
+          <td>- ₹${formatINR(totalDiscount)}</td>
+        </tr>
+        ` : ''}
         ${couponDiscount > 0 ? `
         <tr class="discount-row">
-          <td>Coupon Discount ${couponCode ? `(${couponCode})` : ''}:</td>
+          <td>Coupon OFF ${couponCode ? `(${couponCode})` : ''}:</td>
           <td>- ₹${formatINR(couponDiscount)}</td>
         </tr>
         ` : ''}
@@ -759,7 +766,7 @@ export function generateReceiptHtml(order = {}) {
 
     <!-- FOOTER -->
     <div class="invoice-footer">
-      Thank you for choosing Flower Studio! This is a computer-generated tax invoice.
+      Thank you for choosing Flower Studio! This is a system-generated tax invoice.
     </div>
   </div>
 </body>
