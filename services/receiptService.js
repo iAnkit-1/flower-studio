@@ -716,7 +716,7 @@ export function generateReceiptHtml(order = {}) {
       <table class="summary-table">
         <tr>
           <td>Items Subtotal:</td>
-          <td>₹${formatINR(computedItemsSubtotal)}</td>
+          <td>₹${formatINR(order.itemsSubtotal ?? order.items_subtotal)}</td>
         </tr>
         ${deliveryCharges > 0 ? `
         <tr>
@@ -731,7 +731,7 @@ export function generateReceiptHtml(order = {}) {
         `}
         ${totalDiscount > 0 ? `
         <tr class="discount-row">
-          <td>Discount:</td>
+          <td>Total Discount:</td>
           <td>- ₹${formatINR(totalDiscount)}</td>
         </tr>
         ` : ''}
@@ -743,7 +743,7 @@ export function generateReceiptHtml(order = {}) {
         ` : ''}
         <tr class="grand-total-row">
           <td>Grand Total:</td>
-          <td>₹${formatINR(grandTotal)}</td>
+          <td>₹${formatINR(order.grandTotal ?? order.grand_total)}</td>
         </tr>
       </table>
     </div>
