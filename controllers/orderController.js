@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { normalizeImageUrl } from './productController.js';
 import { getRazorpayClient, createRazorpayOrder } from '../config/razorpay.js';
 import { normalizePhone } from '../middleware/authMiddleware.js';
+import { sendStaffOrderAlert, sendCustomerOrderStatusAlert } from '../services/fcmService.js';
 
 
 /**
@@ -208,6 +209,16 @@ export const createOrder = async (req, res) => {
       // Deduct stock immediately for COD orders since order is PLACED
       await _deductOrderStock(orderDocRef, validatedItems, { stockDeducted: false });
       console.log(`COD Order Placed Successfully: ${orderId}`);
+
+      // Trigger Staff Push Notification with Buzzer Sound & save to notifications history
+      sendStaffOrderAlert({
+        orderId,
+        customerName: recipient_name || req.user?.name || 'Customer',
+        customerPhone: recipient_phone || req.user?.phoneNumber || '',
+        grandTotal: finalGrandTotal,
+        paymentMethod: 'COD',
+        itemsCount: validatedItems.length,
+      }).catch((e) => console.warn('[createOrder Staff Alert Notice]:', e.message));
       return res.status(201).json({
         success: true,
         message: 'Order created successfully (COD).',
@@ -363,6 +374,16 @@ export const verifyPayment = async (req, res) => {
     } catch (_) { }
 
     console.log(`Order ${orderId} verified and successfully stored in orders collection!`);
+
+    // Trigger Staff Push Notification with Buzzer Sound for confirmed paid order
+    sendStaffOrderAlert({
+      orderId,
+      customerName: confirmedOrder.recipient_name || confirmedOrder.recipientName || confirmedOrder.customerName || 'Customer',
+      customerPhone: confirmedOrder.recipient_phone || confirmedOrder.recipientPhone || confirmedOrder.customerPhone || '',
+      grandTotal: confirmedOrder.grand_total || confirmedOrder.grandTotal || 0,
+      paymentMethod: pMethod,
+      itemsCount: (confirmedOrder.items || []).length,
+    }).catch((e) => console.warn('[verifyPayment Staff Alert Notice]:', e.message));
     return res.status(200).json({
       success: true,
       message: 'Payment verified successfully and order confirmed.',
@@ -1213,8 +1234,8 @@ export const getInvoice = async (req, res) => {
     </div>
     <div class="clear"></div>
     <div class="invoice-footer">
-      <p>Thank you for shopping with Flower Studio! To track or modify your gift deliveries, contact support@flowerstudio.com</p>
-      <p>This is a computer-generated document and requires no physical signatures.</p>
+      <p>Thank you for shopping with Flower Studio!</p>
+      <p>This is a system generated document.</p>
     </div>
   </div>
 </body>
@@ -1842,6 +1863,14 @@ export const updateOrderStatus = async (req, res) => {
 
     const updatedSnap = await docRef.get();
 
+    // Trigger Customer Push Notification for Order Status Update
+    sendCustomerOrderStatusAlert({
+      orderId,
+      customerUserId: existingData.userId || existingData.user_id,
+      customerPhone: existingData.recipient_phone || existingData.recipientPhone || existingData.customerPhone || existingData.phone,
+      status: targetStatus,
+    }).catch((e) => console.warn('[updateOrderStatus Customer Alert Notice]:', e.message));
+
     return res.status(200).json({
       success: true,
       message: `Order status updated to ${targetStatus}.`,
@@ -1907,6 +1936,15 @@ export const updateOrderDeliveryStatus = async (req, res) => {
 
     await docRef.update({ orderStatus: newStatus });
     const updatedSnap = await docRef.get();
+
+    // Trigger Customer Push Notification for Delivery Status Update
+    const currentOrderData = docSnap.data() || {};
+    sendCustomerOrderStatusAlert({
+      orderId,
+      customerUserId: currentOrderData.userId || currentOrderData.user_id,
+      customerPhone: currentOrderData.recipient_phone || currentOrderData.recipientPhone || currentOrderData.customerPhone || currentOrderData.phone,
+      status: newStatus,
+    }).catch((e) => console.warn('[updateOrderDeliveryStatus Customer Alert Notice]:', e.message));
 
     return res.status(200).json({
       success: true,
