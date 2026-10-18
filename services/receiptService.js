@@ -1,43 +1,6 @@
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Pre-load assets as Base64 Data URLs with safe lazy fallback
-let cachedLogoB64 = null;
-let cachedSigB64 = null;
-
-function getLogoDataUri() {
-  if (cachedLogoB64) return cachedLogoB64;
-  try {
-    const logoPath = path.resolve(__dirname, '../assets/logo.png');
-    if (fs.existsSync(logoPath)) {
-      const b64 = fs.readFileSync(logoPath).toString('base64');
-      cachedLogoB64 = `data:image/png;base64,${b64}`;
-      return cachedLogoB64;
-    }
-  } catch (err) {
-    console.warn('[receiptService] Logo file read warning:', err.message);
-  }
-  return '';
-}
-
-function getSignatureDataUri() {
-  if (cachedSigB64) return cachedSigB64;
-  try {
-    const sigPath = path.resolve(__dirname, '../assets/signature.jpg');
-    if (fs.existsSync(sigPath)) {
-      const b64 = fs.readFileSync(sigPath).toString('base64');
-      cachedSigB64 = `data:image/jpeg;base64,${b64}`;
-      return cachedSigB64;
-    }
-  } catch (err) {
-    console.warn('[receiptService] Signature file read warning:', err.message);
-  }
-  return '';
-}
+// Static images located under /assets
+const LOGO_SRC = '/assets/logo.png';
+const SIGNATURE_SRC = '/assets/signature.png';
 
 /**
  * Format date in IST (Asia/Kolkata) as dd-mm-yyyy
@@ -252,8 +215,8 @@ export function generateReceiptHtml(order = {}) {
 
   const amountInWords = numberToWordsINR(grandTotal);
 
-  const logoUri = getLogoDataUri();
-  const signatureUri = getSignatureDataUri();
+  const logoUri = LOGO_SRC;
+  const signatureUri = SIGNATURE_SRC;
 
   return `<!DOCTYPE html>
 <html lang="en">
