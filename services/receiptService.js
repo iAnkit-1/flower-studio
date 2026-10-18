@@ -141,12 +141,12 @@ export function generateReceiptHtml(order = {}) {
     `;
   } else {
     for (const item of items) {
-      const pid = (item.productId || item.product_id || item.id || `PROD-${counter}`).toString();
-      const title = item.productTitle || item.title || item.productName || item.product_title || 'Flower Studio Item';
-      const mrp = parseFloat(item.listingPrice ?? item.itemListingPrice ?? item.orderPrice ?? item.price ?? 0);
-      const unitPrice = parseFloat(item.itemOrderPrice ?? item.orderPrice ?? item.price ?? mrp);
-      const discount = parseFloat(item.discount ?? item.itemTotalDiscount ?? Math.max(0, mrp - unitPrice));
-      const qty = parseInt(item.quantity || 1, 10);
+      const pid = (item.productId || item.id || `PROD-${counter}`).toString();
+      const title = item.productTitle || 'Flower Studio Item';
+      const mrp = parseFloat(item.listingPrice);
+      const unitPrice = parseFloat(item.orderPrice);
+      const discount = parseFloat(item.discount ?? Math.max(0, mrp - unitPrice));
+      const qty = parseInt(item.quantity);
       const lineAmount = unitPrice * qty;
 
       computedItemsSubtotal += lineAmount;
