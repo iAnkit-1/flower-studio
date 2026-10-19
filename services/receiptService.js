@@ -117,6 +117,16 @@ export function generateReceiptHtml(order = {}) {
 
   const paymentMethod = (order.paymentMethod || order.payment_method || '').toString().toUpperCase();
   const paymentStatus = (order.paymentStatus || order.payment_status || '').toString().toUpperCase();
+  const razorpayPaymentId = (
+    order.razorpayPaymentId ||
+    order.razorpay_payment_id ||
+    order.paymentDetails?.razorpay_payment_id ||
+    order.paymentDetails?.razorpayPaymentId ||
+    ''
+  ).toString().trim();
+
+  const isPaid = paymentStatus === 'PAID' || paymentStatus === 'PAIDD';
+  const hasPaymentId = Boolean(razorpayPaymentId);
 
   const items = Array.isArray(order.items) ? order.items : [];
 
@@ -687,6 +697,12 @@ export function generateReceiptHtml(order = {}) {
           <span class="lbl">Payment Mode:</span>
           <span class="val">${paymentMethod} (${paymentStatus})</span>
         </div>
+        ${hasPaymentId && isPaid ? `
+        <div class="meta-line">
+          <span class="lbl">Payment ID:</span>
+          <span class="val" style="font-family: monospace; font-size: 11.5px; font-weight: 600; color: #0f172a;">${razorpayPaymentId}</span>
+        </div>
+        ` : ''}
       </div>
     </div>
 

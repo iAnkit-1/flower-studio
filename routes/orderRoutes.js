@@ -20,7 +20,8 @@ import {
   getRequestedOrders,
   createRequestedOrder,
   updateRequestedOrder,
-  createSubscription
+  createSubscription,
+  cancelOrder
 } from '../controllers/orderController.js';
 import {
   requireAuth,
@@ -59,6 +60,8 @@ router.put('/:orderId/payment', requireAdminOrStaff, updateOrderPaymentStatus);
 router.put('/:orderId/delivery', requireAdminOrStaff, updateOrderDeliveryStatus);
 
 // --- Single Order details, invoice & status (Owner or authorized staff) ---
+router.put('/:orderId/cancel', requireAuth, cancelOrder);
+router.post('/:orderId/cancel', requireAuth, cancelOrder);
 router.get('/:orderId/invoice', requireAuth, getInvoice);
 router.get('/:orderId/status', requireAuth, getOrderStatus);
 router.get('/:orderId', requireAuth, getOrderById);

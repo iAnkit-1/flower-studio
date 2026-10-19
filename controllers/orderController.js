@@ -1506,6 +1506,106 @@ export const updateOrderStatus = async (req, res) => {
   }
 };
 
+/**
+ * Cancel Order (Customer Owner or Staff)
+ * PUT /api/orders/:orderId/cancel
+ * Allowed when current orderStatus is 'PLACED' (or 'PENDING')
+ */
+export const cancelOrder = async (req, res) => {
+  const { orderId } = req.params;
+  const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
+  const callerPhone = normalizePhone(req.user?.phoneNumber || '');
+
+  try {
+    let docRef = db.collection('orders').doc(orderId);
+    let docSnap = await docRef.get();
+    if (!docSnap.exists) {
+      const qSnap = await db.collection('orders').where('orderId', '==', orderId).limit(1).get();
+      if (!qSnap.empty) {
+        docSnap = qSnap.docs[0];
+        docRef = docSnap.ref;
+      }
+    }
+
+    if (!docSnap || !docSnap.exists) {
+      return res.status(404).json({ success: false, message: 'Order not found.' });
+    }
+
+    const orderData = docSnap.data();
+
+    // Check ownership if caller is not staff/admin
+    if (!req.user?.isStaff && !req.user?.isAdmin) {
+      const orderUserId = (orderData.userId || orderData.user_id || '').trim();
+      const orderPhone = normalizePhone(orderData.userPhone || orderData.user_phone || '');
+      const recipientPhone = normalizePhone(
+        orderData.deliveryDetails?.recipientPhone ||
+        orderData.recipientPhone ||
+        orderData.recipient_phone ||
+        ''
+      );
+
+      const isOwner =
+        (callerUserId && callerUserId === orderUserId) ||
+        (callerPhone && (callerPhone === orderPhone || callerPhone === recipientPhone));
+
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You do not have permission to cancel this order.',
+        });
+      }
+    }
+
+    // Only allow customer cancellation if current status is PLACED
+    const currentStatus = (orderData.orderStatus || orderData.status || '').toUpperCase();
+    if (currentStatus !== 'PLACED' && !req.user?.isStaff && !req.user?.isAdmin) {
+      return res.status(400).json({
+        success: false,
+        message: `Order cannot be cancelled because it is already ${currentStatus}.`,
+      });
+    }
+
+    const updateData = {
+      orderStatus: 'CANCELLED',
+      status: 'CANCELLED',
+      delivery_status: 'cancelled',
+      updatedAt: new Date().toISOString(),
+    };
+
+    if ((orderData.paymentStatus || '').toUpperCase() === 'PAID') {
+      updateData.paymentStatus = 'REFUND_PENDING';
+    }
+
+    await docRef.update(updateData);
+
+    // Restore inventory stock
+    await _restoreOrderStock(docRef, orderData.items, orderData);
+
+    // Alert staff about customer cancellation
+    sendStaffOrderAlert({
+      orderId,
+      customerName: orderData.recipient_name || orderData.recipientName || 'Customer',
+      customerPhone: orderData.recipient_phone || orderData.recipientPhone || '',
+      grandTotal: orderData.grand_total || orderData.grandTotal || 0,
+      paymentMethod: orderData.paymentMethod || 'COD',
+      itemsCount: (orderData.items || []).length,
+    }).catch((e) => console.warn('[cancelOrder Staff Alert Notice]:', e.message));
+
+    return res.status(200).json({
+      success: true,
+      message: 'Order has been cancelled successfully.',
+      order: { ...orderData, ...updateData },
+    });
+  } catch (err) {
+    console.error('Error cancelling order in Firestore:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to cancel order.',
+      error: err.message,
+    });
+  }
+};
+
 // Manually update payment status
 export const updateOrderPaymentStatus = async (req, res) => {
   const { orderId } = req.params;
