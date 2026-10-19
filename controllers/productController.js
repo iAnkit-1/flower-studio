@@ -588,7 +588,12 @@ export const getAllProducts = async (req, res) => {
           return !excludedCategories.includes(cat);
         });
 
-    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=600');
+    if (isStaff) {
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    } else {
+      res.setHeader('Cache-Control', 'public, max-age=120, s-maxage=1800, stale-while-revalidate=3600');
+      res.setHeader('Vary', 'Accept-Encoding, Authorization');
+    }
 
     return res.status(200).json({
       success: true,
@@ -641,6 +646,13 @@ export const getProductById = async (req, res) => {
     }
 
     const product = formatProductDocument(doc, req);
+
+    if (isStaff) {
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    } else {
+      res.setHeader('Cache-Control', 'public, max-age=120, s-maxage=1800, stale-while-revalidate=3600');
+      res.setHeader('Vary', 'Accept-Encoding, Authorization');
+    }
 
     return res.status(200).json({
       success: true,
@@ -715,7 +727,12 @@ export const getGreetingCards = async (req, res) => {
       );
     });
 
-    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=600');
+    if (isStaff) {
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    } else {
+      res.setHeader('Cache-Control', 'public, max-age=120, s-maxage=1800, stale-while-revalidate=3600');
+      res.setHeader('Vary', 'Accept-Encoding, Authorization');
+    }
 
     return res.status(200).json({
       success: true,
@@ -839,7 +856,12 @@ export const getCelebrationProducts = async (req, res) => {
       return isTopper || isAccessories || isPartySpecials || isGift;
     });
 
-    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=600');
+    if (isStaff) {
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    } else {
+      res.setHeader('Cache-Control', 'public, max-age=120, s-maxage=1800, stale-while-revalidate=3600');
+      res.setHeader('Vary', 'Accept-Encoding, Authorization');
+    }
 
     return res.status(200).json({
       success: true,

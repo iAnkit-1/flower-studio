@@ -169,6 +169,8 @@ export const getAllCoupons = async (req, res) => {
     const docRef = db.collection('coupon_codes').doc('codes');
     const snap = await docRef.get();
 
+    res.setHeader('Cache-Control', 'public, max-age=120, s-maxage=1800, stale-while-revalidate=3600');
+
     if (snap.exists) {
       const data = snap.data() || {};
       const codes = data.code || data.codes || data;

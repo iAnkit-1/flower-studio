@@ -77,6 +77,8 @@ export const getDeliveryCharges = async (req, res) => {
     const order = ['standard', 'fixed_time', 'midnight'];
     charges.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
 
+    res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=3600, stale-while-revalidate=7200');
+
     return res.status(200).json({ success: true, charges });
   } catch (err) {
     console.error('[Delivery Charges] Error fetching charges:', err);
@@ -137,7 +139,7 @@ export const getDeliveryPincodes = async (req, res) => {
     const docSnap = await db.collection('delivery_pincodes').doc('tricity').get();
     if (docSnap.exists) {
       const data = docSnap.data();
-      res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=86400');
+      res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=3600, stale-while-revalidate=7200');
       return res.status(200).json({
         success: true,
         pincodes: data.pincodes || [],

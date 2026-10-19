@@ -121,6 +121,17 @@ app.use('/api/orders/webhook',   express.raw({ type: 'application/json' }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
+// Explicitly guarantee real-time & transactional endpoints are never cached by Cloudflare edge or clients
+app.use(
+  ['/api/orders', '/api/custom-orders', '/api/notifications', '/api/support', '/api/payments', '/api/users'],
+  (req, res, next) => {
+    res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    next();
+  }
+);
+
 // Customer routes (Firebase Auth & Public Data)
 app.use('/api/products',                 productRoutes);
 app.use('/api/auth',                     authRoutes);
