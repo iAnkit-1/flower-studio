@@ -413,15 +413,26 @@ export function generateReceiptHtml(order = {}) {
     }
 
     /* ITEMS TABLE */
+    .table-scroll-hint {
+      display: none;
+      font-size: 11px;
+      font-weight: 600;
+      color: #64748b;
+      margin-bottom: 6px;
+      text-align: right;
+    }
+
     .table-container {
       margin-bottom: 20px;
       border: 1px solid #e2e8f0;
       border-radius: 6px;
-      overflow: hidden;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
     }
 
     .items-table {
       width: 100%;
+      min-width: 600px;
       border-collapse: collapse;
       font-size: 12px;
     }
@@ -602,13 +613,82 @@ export function generateReceiptHtml(order = {}) {
       color: #64748b;
     }
 
+    /* MOBILE RESPONSIVE TWEAKS */
+    @media (max-width: 680px) {
+      body {
+        padding: 12px 8px;
+      }
+      .action-bar {
+        margin-bottom: 12px;
+      }
+      .btn-print {
+        width: 100%;
+        justify-content: center;
+        padding: 11px 16px;
+      }
+      .invoice-card {
+        padding: 20px 14px;
+        border-radius: 8px;
+      }
+      .invoice-header {
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        gap: 12px;
+      }
+      .header-right-branding {
+        text-align: center;
+      }
+      .tax-invoice-heading {
+        font-size: 16px;
+        margin-bottom: 14px;
+      }
+      .invoice-sections-grid {
+        grid-template-columns: 1fr;
+        gap: 16px;
+        padding: 14px;
+      }
+      .meta-line .lbl {
+        width: 105px;
+      }
+      .table-scroll-hint {
+        display: block;
+      }
+      .table-container {
+        border-radius: 6px;
+        box-shadow: inset -4px 0 8px -4px rgba(0,0,0,0.08);
+      }
+      .items-table {
+        min-width: 580px;
+      }
+      .summary-wrapper {
+        justify-content: flex-end;
+      }
+      .summary-table {
+        width: 100%;
+        max-width: 100%;
+      }
+      .amount-words-box {
+        padding: 10px 12px;
+        font-size: 11px;
+        margin-bottom: 20px;
+      }
+      .signatory-container {
+        display: flex;
+        justify-content: flex-end;
+      }
+      .signatory-inner {
+        width: 200px;
+      }
+    }
+
     @media print {
       body {
         background: #ffffff;
         padding: 0;
         font-size: 12px;
       }
-      .action-bar {
+      .action-bar, .table-scroll-hint {
         display: none !important;
       }
       .invoice-card {
@@ -616,6 +696,25 @@ export function generateReceiptHtml(order = {}) {
         border: none !important;
         padding: 0 !important;
         max-width: 100% !important;
+      }
+      .table-container {
+        overflow: visible !important;
+        border: 1px solid #cbd5e1 !important;
+        box-shadow: none !important;
+      }
+      .items-table {
+        min-width: 100% !important;
+        width: 100% !important;
+      }
+      .invoice-sections-grid {
+        grid-template-columns: 1.15fr 0.85fr !important;
+      }
+      .invoice-header {
+        flex-direction: row !important;
+        justify-content: space-between !important;
+      }
+      .header-right-branding {
+        text-align: right !important;
       }
       @page {
         size: A4 portrait;
@@ -707,6 +806,9 @@ export function generateReceiptHtml(order = {}) {
     </div>
 
     <!-- ITEMS TABLE -->
+    <div class="table-scroll-hint">
+      <span>⟷ Scroll horizontally to view all columns</span>
+    </div>
     <div class="table-container">
       <table class="items-table">
         <thead>
