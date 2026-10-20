@@ -145,9 +145,22 @@ const dbProxy = new Proxy(
   }
 );
 
-export const admin = {
-  apps: [{ name: 'default' }],
-};
+import nodeAdmin from 'firebase-admin';
+
+// Initialize Firebase Admin SDK for Authentication services
+try {
+  const sa = getServiceAccount();
+  if (sa && nodeAdmin.apps.length === 0) {
+    nodeAdmin.initializeApp({
+      credential: nodeAdmin.credential.cert(sa),
+      projectId: sa.project_id || sa.projectId,
+    });
+  }
+} catch (e) {
+  console.warn('[Firebase Admin Init Warning]:', e.message);
+}
+
+export const admin = nodeAdmin;
 
 export { FieldValue } from '@ljoukov/firebase-admin-cloudflare/firestore';
 

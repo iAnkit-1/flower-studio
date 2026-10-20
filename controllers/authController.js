@@ -151,6 +151,30 @@ export const verifyFirebaseToken = async (req, res) => {
         }
       }
 
+      const cleanEmail = (email || decodedToken?.email || '').trim();
+      if (userSnap.exists && cleanEmail && cleanEmail !== docId) {
+        try {
+          const emailDocRef = db.collection('users').doc(cleanEmail);
+          const emailSnap = await emailDocRef.get();
+          if (emailSnap.exists) {
+            const emailData = emailSnap.data() || {};
+            if ((!userProfile.addresses || userProfile.addresses.length === 0) && emailData.addresses) {
+              userProfile.addresses = emailData.addresses;
+            }
+            if ((!userProfile.orders || userProfile.orders.length === 0) && emailData.orders) {
+              userProfile.orders = emailData.orders;
+            }
+            if (!emailData.uid || emailData.uid !== firebaseUid) {
+              await emailDocRef.update({
+                uid: firebaseUid,
+                updatedAt: new Date().toISOString()
+              });
+              console.log(`[Firebase Auth Sync] Auto-healed blank UID on email document for ${cleanEmail}`);
+            }
+          }
+        } catch (_) {}
+      }
+
       // If Firebase User UID is known, merge entry indexed by User UID
       if (firebaseUid && docId !== firebaseUid) {
         const uidRef = db.collection('users').doc(firebaseUid);
