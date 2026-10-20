@@ -25,12 +25,12 @@ async function verifyEdgeFirebaseIdToken(token) {
  * Decodes the Firebase ID token and syncs/merges the user profile into Firestore.
  */
 export const verifyFirebaseToken = async (req, res) => {
-  const { idToken, phoneNumber, fullName, email } = req.body;
+  const { idToken, phoneNumber, fullName, email, uid } = req.body;
 
-  if (!idToken && !phoneNumber) {
+  if (!idToken && !phoneNumber && !email) {
     return res.status(400).json({
       success: false,
-      message: 'Firebase ID Token or Mobile Number is required.'
+      message: 'Firebase ID Token, Mobile Number, or Email is required.'
     });
   }
 
@@ -53,7 +53,32 @@ export const verifyFirebaseToken = async (req, res) => {
       }
     }
 
-    const firebaseUid = decodedToken?.uid || '';
+    let firebaseUid = decodedToken?.uid || (uid ? String(uid).trim() : '');
+
+    // Fallback: If UID not found from token (e.g. client sent Google OAuth ID token or un-updated app),
+    // look up the user record directly in Firebase Auth by email or phone
+    if (!firebaseUid && admin && typeof admin.auth === 'function') {
+      const cleanEmail = (email || decodedToken?.email || '').trim();
+      if (cleanEmail) {
+        try {
+          const userRec = await admin.auth().getUserByEmail(cleanEmail);
+          if (userRec?.uid) {
+            firebaseUid = userRec.uid;
+            console.log(`[Firebase Auth Sync] Recovered UID ${firebaseUid} for email ${cleanEmail}`);
+          }
+        } catch (_) {}
+      }
+      if (!firebaseUid && extractedPhone) {
+        try {
+          const userRec = await admin.auth().getUserByPhoneNumber(extractedPhone);
+          if (userRec?.uid) {
+            firebaseUid = userRec.uid;
+            console.log(`[Firebase Auth Sync] Recovered UID ${firebaseUid} for phone ${extractedPhone}`);
+          }
+        } catch (_) {}
+      }
+    }
+
     let docId = extractedPhone ? extractedPhone.trim() : (firebaseUid || email || decodedToken?.email);
 
     if (!docId) {
@@ -90,7 +115,7 @@ export const verifyFirebaseToken = async (req, res) => {
         const updateData = { updatedAt: new Date().toISOString() };
         let modified = false;
 
-        // Ensure uid is stored and updated
+        // Ensure uid is stored and updated (auto-heals any previously blank uid)
         if (firebaseUid && (!userProfile.uid || userProfile.uid !== firebaseUid)) {
           updateData.uid = firebaseUid;
           userProfile.uid = firebaseUid;
@@ -126,27 +151,30 @@ export const verifyFirebaseToken = async (req, res) => {
         }
       }
 
-      // If Firebase User UID is decoded, merge entry indexed by User UID
-      if (decodedToken && decodedToken.uid && docId !== decodedToken.uid) {
-        const uidRef = db.collection('users').doc(decodedToken.uid);
+      // If Firebase User UID is known, merge entry indexed by User UID
+      if (firebaseUid && docId !== firebaseUid) {
+        const uidRef = db.collection('users').doc(firebaseUid);
         const uidSnap = await uidRef.get();
         if (!uidSnap.exists) {
           await uidRef.set({
-            uid: decodedToken.uid,
+            uid: firebaseUid,
             phoneNumber: cleanPhone,
             provider: cleanPhone ? 'phone' : 'google',
             fullName: userProfile.fullName || '',
             email: userProfile.email || '',
             alternateNumber: '',
-            addresses: [],
-            reminders: [],
-            orders: [],
+            addresses: userProfile.addresses || [],
+            reminders: userProfile.reminders || [],
+            orders: userProfile.orders || [],
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           });
-          console.log(`[Firebase Auth Sync] Created UID user entry in Firestore for ${decodedToken.uid}`);
+          console.log(`[Firebase Auth Sync] Created UID user entry in Firestore for ${firebaseUid}`);
         } else {
           const uidUpdate = { updatedAt: new Date().toISOString() };
+          if (!uidSnap.data()?.uid) {
+            uidUpdate.uid = firebaseUid;
+          }
           if (FieldValue && typeof FieldValue.delete === 'function') {
             uidUpdate.id = FieldValue.delete();
             uidUpdate.address = FieldValue.delete();

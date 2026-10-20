@@ -207,7 +207,9 @@ export const createOrder = async (req, res) => {
     const orderDocument = {
       id: orderId,
       orderId: orderId,
+      uid: verifiedUserId,
       userId: verifiedUserId,
+      user_id: verifiedUserId,
       userPhone: verifiedUserPhone,
       recipientName: recipient_name,
       recipientPhone: recipient_phone,
@@ -1376,6 +1378,10 @@ export const getAllOrders = async (req, res) => {
 
       if (callerUserId) {
         try {
+          const uidSnap = await query.where('uid', '==', callerUserId).get();
+          uidSnap.docs.forEach(d => matchedDocs.set(d.id, d));
+        } catch (_) { }
+        try {
           const uSnap = await query.where('userId', '==', callerUserId).get();
           uSnap.docs.forEach(d => matchedDocs.set(d.id, d));
         } catch (_) { }
@@ -1463,7 +1469,7 @@ export const getOrderById = async (req, res) => {
       const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
       const callerPhone = normalizePhone(req.user?.phoneNumber || '');
 
-      const orderUserId = (orderData.userId || orderData.user_id || '').trim();
+      const orderUserId = (orderData.uid || orderData.userId || orderData.user_id || '').trim();
       const orderPhone = normalizePhone(orderData.userPhone || orderData.user_phone || '');
       const recipientPhone = normalizePhone(orderData.deliveryDetails?.recipientPhone || orderData.recipientPhone || orderData.recipient_phone || '');
 
