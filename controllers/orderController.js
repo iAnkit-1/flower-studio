@@ -1485,6 +1485,9 @@ export const getAllOrders = async (req, res) => {
     const mapped = (snapshot.docs || []).map(doc => formatOrderDocument(doc, req));
 
     const filteredOrders = mapped.filter((order) => {
+      const oid = (order.orderId || order.id || '').toString();
+      if (oid.startsWith('CUST-')) return false;
+
       const pm = (order.paymentMethod || '').toLowerCase();
       const ps = (order.paymentStatus || '').toUpperCase();
       const os = (order.orderStatus || '').toUpperCase();
@@ -1825,9 +1828,9 @@ export const formatCustomOrderDocument = (doc, req) => {
   const docId = doc.id || data.id || '';
   let refImages = [];
   if (Array.isArray(data.referenceImages)) {
-    refImages = data.referenceImages.map(img => normalizeImageUrl(img, req));
+    refImages = data.referenceImages.map(img => normalizeImageUrl(img, req)).filter(img => typeof img === 'string' && img.trim().length > 0);
   } else if (Array.isArray(data.reference_images)) {
-    refImages = data.reference_images.map(img => normalizeImageUrl(img, req));
+    refImages = data.reference_images.map(img => normalizeImageUrl(img, req)).filter(img => typeof img === 'string' && img.trim().length > 0);
   }
   const rawRefUrl = data.referenceImageUrl || data.reference_image_url || '';
   const refUrl = rawRefUrl ? normalizeImageUrl(rawRefUrl, req) : (refImages.length > 0 ? refImages[0] : '');
@@ -1950,13 +1953,24 @@ export const createCustomOrder = async (req, res) => {
   const id = `CUST-${istDate}-${rand4}`;
 
   let refImagesList = [];
-  if (Array.isArray(referenceImages)) {
-    refImagesList = referenceImages.map(img => normalizeImageUrl(img, req));
-  } else if (typeof referenceImageUrl === 'string' && referenceImageUrl.trim().isNotEmpty) {
-    refImagesList = referenceImageUrl.split(',').map(u => normalizeImageUrl(u.trim(), req)).filter(u => u.length > 0);
+  const incomingImages = referenceImages || req.body.reference_images || req.body.images || [];
+  if (Array.isArray(incomingImages)) {
+    refImagesList = incomingImages
+      .map(img => (typeof img === 'string' ? normalizeImageUrl(img.trim(), req) : ''))
+      .filter(u => typeof u === 'string' && u.trim().length > 0);
+  } else if (typeof referenceImageUrl === 'string' && referenceImageUrl.trim().length > 0) {
+    refImagesList = referenceImageUrl
+      .split(',')
+      .map(u => normalizeImageUrl(u.trim(), req))
+      .filter(u => typeof u === 'string' && u.trim().length > 0);
+  } else if (typeof incomingImages === 'string' && incomingImages.trim().length > 0) {
+    refImagesList = incomingImages
+      .split(',')
+      .map(u => normalizeImageUrl(u.trim(), req))
+      .filter(u => typeof u === 'string' && u.trim().length > 0);
   }
 
-  const primaryRefUrl = refImagesList.length > 0 ? refImagesList[0] : (referenceImageUrl ? normalizeImageUrl(referenceImageUrl, req) : '');
+  const primaryRefUrl = refImagesList.length > 0 ? refImagesList[0] : (referenceImageUrl ? normalizeImageUrl(referenceImageUrl.trim(), req) : '');
 
   const customOrderDoc = {
     id,

@@ -23,12 +23,12 @@ const router = express.Router();
 router.get('/images/*', serveR2Image);
 router.get('/image/*', serveR2Image);
 
-// R2 Pre-signed URL generation for direct upload (Admin / Staff only)
-router.post('/r2-presigned-url', requireAdminOrStaff, getR2UploadPresignedUrl);
-router.post('/upload-signature', requireAdminOrStaff, getR2UploadPresignedUrl);
+// R2 Pre-signed URL generation for direct upload (Customers and Staff)
+router.post('/r2-presigned-url', optionalAuth, getR2UploadPresignedUrl);
+router.post('/upload-signature', optionalAuth, getR2UploadPresignedUrl);
 
-// R2 Direct backend upload fallback (Admin / Staff only)
-router.post('/upload-direct', requireAdminOrStaff, uploadDirectToR2);
+// R2 Direct backend upload fallback (Customers and Staff)
+router.post('/upload-direct', optionalAuth, uploadDirectToR2);
 
 // Dedicated endpoints (Public catalogue data)
 router.get('/greeting-cards', optionalAuth, getGreetingCards);

@@ -70,7 +70,8 @@ export const processImageToFileName = async (img, folder = 'product-images') => 
     trimmed.includes('.r2.cloudflarestorage.com') ||
     filename.startsWith('prod_') ||
     filename.startsWith('sub_') ||
-    filename.startsWith('order_')
+    filename.startsWith('order_') ||
+    filename.startsWith('custom_')
   ) {
     return filename;
   }
@@ -97,7 +98,7 @@ export const normalizeImageUrl = (url, req) => {
   if (!filename) return '';
 
   const isSub = url.includes('subscription-plans') || url.includes('subscription_plans') || filename.startsWith('sub_');
-  const isCustomOrder = url.includes('custom-orders') || url.includes('custom_orders') || filename.startsWith('order_');
+  const isCustomOrder = url.includes('custom-orders') || url.includes('custom_orders') || filename.startsWith('order_') || filename.startsWith('custom_');
   const folder = isSub ? 'subscription-plans' : (isCustomOrder ? 'custom-orders' : (R2_FOLDER || 'product-images'));
 
   const cdnBase = (R2_PUBLIC_URL && !R2_PUBLIC_URL.includes('.r2.cloudflarestorage.com'))
@@ -245,7 +246,7 @@ export const getR2UploadPresignedUrl = async (req, res) => {
     const timestamp = Date.now();
     const randomSuffix = Math.random().toString(36).substring(2, 8);
     const isSubFolder = folder === 'subscription-plans' || folder === 'subscription_plans' || (typeof fileName === 'string' && fileName.startsWith('sub_'));
-    const isCustomFolder = folder === 'custom-orders' || folder === 'custom_orders' || (typeof fileName === 'string' && fileName.startsWith('order_'));
+    const isCustomFolder = folder === 'custom-orders' || folder === 'custom_orders' || (typeof fileName === 'string' && (fileName.startsWith('order_') || fileName.startsWith('custom_')));
     const targetFolder = isSubFolder
       ? 'subscription-plans'
       : (isCustomFolder ? 'custom-orders' : (R2_FOLDER || 'product-images'));
@@ -303,7 +304,7 @@ export const uploadDirectToR2 = async (req, res) => {
     const timestamp = Date.now();
     const randomSuffix = Math.random().toString(36).substring(2, 8);
     const isSubFolder = folder === 'subscription-plans' || folder === 'subscription_plans' || (typeof fileName === 'string' && fileName.startsWith('sub_'));
-    const isCustomFolder = folder === 'custom-orders' || folder === 'custom_orders' || (typeof fileName === 'string' && fileName.startsWith('order_'));
+    const isCustomFolder = folder === 'custom-orders' || folder === 'custom_orders' || (typeof fileName === 'string' && (fileName.startsWith('order_') || fileName.startsWith('custom_')));
     const targetFolder = isSubFolder
       ? 'subscription-plans'
       : (isCustomFolder ? 'custom-orders' : (R2_FOLDER || 'product-images'));
