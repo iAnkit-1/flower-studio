@@ -10,20 +10,20 @@ import {
   sendChatMessage,
 } from '../controllers/supportController.js';
 import {
-  optionalAuth,
+  requireAuth,
   requireAdminOrStaff,
 } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
 // Live ticket counts for badges on Org Web and Organization App
-router.get('/counts', optionalAuth, getTicketCounts);
+router.get('/counts', requireAuth, getTicketCounts);
 
 // Tickets listing (Staff sees all, Customer sees own)
-router.get('/', optionalAuth, getTickets);
+router.get('/', requireAuth, getTickets);
 
 // Create new support ticket (Customer from order details or Org Web)
-router.post('/', optionalAuth, createTicket);
+router.post('/', requireAuth, createTicket);
 
 // Operational ticket updates (Staff only)
 router.put('/:id/status', requireAdminOrStaff, updateTicketStatus);
@@ -32,6 +32,6 @@ router.put('/:id/assign', requireAdminOrStaff, assignTicket);
 router.patch('/:id', requireAdminOrStaff, updateTicket);
 
 // Send message in ticket chat (Ticket owner or Staff)
-router.post('/:id/messages', optionalAuth, sendChatMessage);
+router.post('/:id/messages', requireAuth, sendChatMessage);
 
 export default router;

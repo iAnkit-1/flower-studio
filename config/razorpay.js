@@ -4,8 +4,8 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 export function getRazorpayClient() {
-  const keyId = process.env.RAZORPAY_KEY_ID || 'rzp_live_Tlujw9WTMvsKVD';
-  const keySecret = process.env.RAZORPAY_KEY_SECRET || '7ewgdIzkFSzl7CPRbg32UNmq';
+  const keyId = process.env.RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
 
   if (!keyId || !keySecret) {
     console.warn('[Razorpay] Keys missing in environment variables.');
@@ -27,11 +27,11 @@ export function getRazorpayClient() {
  * Universal Razorpay Order Creator (Works natively in Cloudflare Workers, Node, and Vercel)
  */
 export async function createRazorpayOrder({ amount, currency = 'INR', receipt, notes = {} }) {
-  const keyId = process.env.RAZORPAY_KEY_ID || 'rzp_live_Tlujw9WTMvsKVD';
-  const keySecret = process.env.RAZORPAY_KEY_SECRET || '7ewgdIzkFSzl7CPRbg32UNmq';
+  const keyId = process.env.RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
 
   if (!keyId || !keySecret) {
-    throw new Error('Razorpay API credentials not configured.');
+    throw new Error('Razorpay API credentials not configured. Please set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.');
   }
 
   const receiptStr = String(receipt || `rcpt_${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '_').slice(-40);

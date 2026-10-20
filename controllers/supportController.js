@@ -150,48 +150,68 @@ export const getTicketCounts = async (req, res) => {
     const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
     const callerPhone = normalizePhone(req.user?.phoneNumber || '');
 
-    const snapshot = await db.collection('support_tickets').get();
-    let docs = snapshot.docs;
-
+    let baseQuery = db.collection('support_tickets');
     if (!isStaff) {
-      docs = docs.filter((doc) => {
-        const d = doc.data();
-        const tUser = (d.userId || '').trim();
-        const tPhone = normalizePhone(d.customerPhone || '');
-        return (
-          (callerUserId && tUser && callerUserId === tUser) ||
-          (callerPhone && tPhone && callerPhone === tPhone)
-        );
-      });
+      if (callerUserId) {
+        baseQuery = baseQuery.where('userId', '==', callerUserId);
+      } else if (callerPhone) {
+        baseQuery = baseQuery.where('customerPhone', '==', callerPhone);
+      } else {
+        return res.status(200).json({
+          success: true,
+          counts: { total: 0, open: 0, inProgress: 0, awaitingCustomer: 0, resolved: 0, activeCount: 0 },
+        });
+      }
     }
 
-    let open = 0;
-    let inProgress = 0;
-    let awaitingCustomer = 0;
-    let resolved = 0;
+    try {
+      const [totalSnap, openSnap, inProgSnap, awaitSnap, resSnap] = await Promise.all([
+        baseQuery.count().get(),
+        baseQuery.where('status', 'in', ['OPEN', 'Open', 'open']).count().get(),
+        baseQuery.where('status', 'in', ['IN PROGRESS', 'In Progress', 'in progress', 'IN_PROGRESS']).count().get(),
+        baseQuery.where('status', 'in', ['AWAITING CUSTOMER', 'Awaiting Customer', 'awaiting customer']).count().get(),
+        baseQuery.where('status', 'in', ['RESOLVED', 'Resolved', 'resolved', 'CLOSED', 'closed']).count().get(),
+      ]);
 
-    docs.forEach((doc) => {
-      const norm = normalizeStatus(doc.data().status);
-      if (norm === 'OPEN') open++;
-      else if (norm === 'IN PROGRESS') inProgress++;
-      else if (norm === 'AWAITING CUSTOMER') awaitingCustomer++;
-      else if (norm === 'RESOLVED') resolved++;
-    });
+      const total = totalSnap.data().count;
+      const open = openSnap.data().count;
+      const inProgress = inProgSnap.data().count;
+      const awaitingCustomer = awaitSnap.data().count;
+      const resolved = resSnap.data().count;
+      const activeCount = open + inProgress + awaitingCustomer;
 
-    const total = docs.length;
-    const activeCount = open + inProgress + awaitingCustomer;
+      return res.status(200).json({
+        success: true,
+        counts: {
+          total,
+          open,
+          inProgress,
+          awaitingCustomer,
+          resolved,
+          activeCount,
+        },
+      });
+    } catch (aggErr) {
+      console.warn('[getTicketCounts Aggregation Notice - using fallback]:', aggErr.message);
+      const snapshot = await baseQuery.limit(100).get();
+      let open = 0, inProgress = 0, awaitingCustomer = 0, resolved = 0;
 
-    return res.status(200).json({
-      success: true,
-      counts: {
-        total,
-        open,
-        inProgress,
-        awaitingCustomer,
-        resolved,
-        activeCount,
-      },
-    });
+      snapshot.docs.forEach((doc) => {
+        const norm = normalizeStatus(doc.data().status);
+        if (norm === 'OPEN') open++;
+        else if (norm === 'IN PROGRESS') inProgress++;
+        else if (norm === 'AWAITING CUSTOMER') awaitingCustomer++;
+        else if (norm === 'RESOLVED') resolved++;
+      });
+
+      const total = snapshot.docs.length;
+      const activeCount = open + inProgress + awaitingCustomer;
+
+      return res.status(200).json({
+        success: true,
+        counts: { total, open, inProgress, awaitingCustomer, resolved, activeCount },
+      });
+    }
   } catch (err) {
     console.error('Error fetching ticket counts:', err);
     return res.status(500).json({

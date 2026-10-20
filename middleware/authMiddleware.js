@@ -2,7 +2,9 @@ import jwt from 'jsonwebtoken';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import db, { admin } from '../config/db.js';
 
-export const JWT_SECRET = process.env.JWT_SECRET || 'fs_org_jwt_secret_change_in_prod_2024';
+export const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production'
+  ? (() => { throw new Error('CRITICAL: JWT_SECRET environment variable is missing.'); })()
+  : 'fs_org_jwt_secret_change_in_prod_2024');
 
 // Google JWKS for verifying Firebase ID Tokens on Edge / Node
 const GOOGLE_JWKS = createRemoteJWKSet(
@@ -122,7 +124,7 @@ export const verifyAuthToken = async (token) => {
   } catch (jwtErr) {
     // If it was signed with JWT_SECRET but is expired, reject immediately
     if (jwtErr.name === 'TokenExpiredError') {
-      return { error: 'TOKEN_EXPIRED', message: 'Session expired. Please log in again.' };
+      return { error: 'TOKEN_EXPIRED', message: 'Session expired. Please login again.' };
     }
     // If signature mismatch, it might be a Google/Firebase ID token. Fall through.
   }

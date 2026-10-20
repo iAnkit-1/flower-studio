@@ -1,4 +1,4 @@
-import db from '../config/db.js';
+import db, { FieldValue } from '../config/db.js';
 
 /**
  * Normalizes phone number to standard 10-digit format
@@ -10,64 +10,97 @@ const normalizePhone = (phone) => {
 };
 
 /**
- * Resolves the Firestore document for the specific user in the `users` collection.
- * Matches by:
- * 1. Document ID matching userId or phone variants
- * 2. Field queries: phoneNumber == phone, uid == userId, userId == userId
+ * Resolves the Firestore document for a specific user in the `users` collection.
+ * Efficient 1-read direct document lookups matching by:
+ * 1. UID: users/{uid}
+ * 2. Phone: users/+91XXXXXXXXXX
+ * 3. Email: users/{email} (Google / Email Auth accounts where docId is email)
+ * Followed by targeted fallback queries if needed.
  */
-export const findUserDoc = async (userId, rawPhone) => {
+export const findUserDoc = async (userId, rawPhone, rawEmail) => {
   if (!db) return null;
 
   const validUserId = (userId && typeof userId === 'string' && userId !== 'null' && userId !== 'undefined') ? userId.trim() : null;
   const validPhone = (rawPhone && typeof rawPhone === 'string' && rawPhone !== 'null' && rawPhone !== 'undefined') ? rawPhone.trim() : null;
   const phone10 = validPhone ? normalizePhone(validPhone) : null;
+  const validEmail = (rawEmail && typeof rawEmail === 'string' && rawEmail.includes('@'))
+    ? rawEmail.trim().toLowerCase()
+    : ((validUserId && validUserId.includes('@')) ? validUserId.toLowerCase() : null);
 
-  const candidates = [];
-  if (validUserId) candidates.push(validUserId);
-  if (validPhone) candidates.push(validPhone);
-  if (phone10) {
-    if (!candidates.includes(phone10)) candidates.push(phone10);
-    if (!candidates.includes(`+91${phone10}`)) candidates.push(`+91${phone10}`);
+  // 1. Direct document lookups by ID (Standardized - exactly 1 read)
+  // A. Direct document ID by UID
+  if (validUserId && !validUserId.includes('@')) {
+    try {
+      const uidRef = db.collection('users').doc(validUserId);
+      const snap = await uidRef.get();
+      if (snap.exists) {
+        return { ref: uidRef, snap, data: snap.data(), id: validUserId };
+      }
+    } catch (_) {}
   }
 
-  // 1. Direct document ID lookup
-  for (const cid of candidates) {
-    if (!cid) continue;
-    const docRef = db.collection('users').doc(cid);
-    const snap = await docRef.get();
-    if (snap.exists) {
-      return { ref: docRef, snap, data: snap.data(), id: cid };
-    }
+  // B. Direct document ID by normalized phone (+91XXXXXXXXXX)
+  if (phone10) {
+    try {
+      const phoneDocId = `+91${phone10}`;
+      const phoneRef = db.collection('users').doc(phoneDocId);
+      const snap = await phoneRef.get();
+      if (snap.exists) {
+        return { ref: phoneRef, snap, data: snap.data(), id: phoneDocId };
+      }
+    } catch (_) {}
   }
 
-  // 2. Query lookup by phoneNumber field
-  if (phone10) {
-    const phoneVariants = [phone10, `+91${phone10}`, validPhone].filter(Boolean);
-    for (const pv of phoneVariants) {
-      const qSnap = await db.collection('users').where('phoneNumber', '==', pv).limit(1).get();
-      if (!qSnap.empty) {
-        const doc = qSnap.docs[0];
+  // C. Direct document ID by email (Google / Email Auth accounts)
+  if (validEmail) {
+    try {
+      const emailRef = db.collection('users').doc(validEmail);
+      const snap = await emailRef.get();
+      if (snap.exists) {
+        return { ref: emailRef, snap, data: snap.data(), id: validEmail };
+      }
+    } catch (_) {}
+  }
+
+  // 2. Targeted fallback queries (only executed if direct docId lookup misses)
+  if (validUserId && !validUserId.includes('@')) {
+    try {
+      const uidSnap = await db.collection('users').where('uid', '==', validUserId).limit(1).get();
+      if (!uidSnap.empty) {
+        const doc = uidSnap.docs[0];
         return { ref: doc.ref, snap: doc, data: doc.data(), id: doc.id };
       }
-    }
+    } catch (_) {}
   }
 
-  // 3. Query lookup by uid or userId field
-  if (validUserId) {
-    const uidSnap = await db.collection('users').where('uid', '==', validUserId).limit(1).get();
-    if (!uidSnap.empty) {
-      const doc = uidSnap.docs[0];
-      return { ref: doc.ref, snap: doc, data: doc.data(), id: doc.id };
-    }
-    const userIdSnap = await db.collection('users').where('userId', '==', validUserId).limit(1).get();
-    if (!userIdSnap.empty) {
-      const doc = userIdSnap.docs[0];
-      return { ref: doc.ref, snap: doc, data: doc.data(), id: doc.id };
-    }
+  if (phone10) {
+    try {
+      const phoneSnap = await db.collection('users')
+        .where('phoneNumber', 'in', [`+91${phone10}`, phone10])
+        .limit(1)
+        .get();
+      if (!phoneSnap.empty) {
+        const doc = phoneSnap.docs[0];
+        return { ref: doc.ref, snap: doc, data: doc.data(), id: doc.id };
+      }
+    } catch (_) {}
   }
 
-  // 4. Return preferred document reference for new user creation
-  const primaryId = (phone10 && phone10.length >= 10) ? `+91${phone10}` : (validUserId || validPhone || null);
+  if (validEmail) {
+    try {
+      const emailSnap = await db.collection('users')
+        .where('email', '==', validEmail)
+        .limit(1)
+        .get();
+      if (!emailSnap.empty) {
+        const doc = emailSnap.docs[0];
+        return { ref: doc.ref, snap: doc, data: doc.data(), id: doc.id };
+      }
+    } catch (_) {}
+  }
+
+  // 3. Return standardized reference for new user doc creation
+  const primaryId = (phone10 && phone10.length >= 10 ? `+91${phone10}` : null) || validEmail || validUserId;
   if (primaryId) {
     const newRef = db.collection('users').doc(primaryId);
     return { ref: newRef, snap: null, data: null, id: primaryId };
@@ -83,13 +116,16 @@ export const resolveReminderUserIdentity = (req) => {
   const isStaff = Boolean(req.user?.isStaff || req.user?.isAdmin);
   const callerPhone = normalizePhone(req.user?.phoneNumber || '');
   const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
+  const callerEmail = (req.user?.email || '').trim().toLowerCase();
 
   if (isStaff) {
     const rawPhone = req.query?.phone || req.query?.userPhone || req.body?.phone || req.body?.userPhone;
     const targetUserId = req.query?.userId || req.query?.uid || req.body?.userId || req.body?.uid;
+    const targetEmail = req.query?.email || req.body?.email;
     return {
       userId: targetUserId || callerUserId,
       phone: rawPhone || callerPhone,
+      email: (targetEmail ? String(targetEmail).trim().toLowerCase() : callerEmail),
     };
   }
 
@@ -97,6 +133,7 @@ export const resolveReminderUserIdentity = (req) => {
   return {
     userId: callerUserId,
     phone: callerPhone,
+    email: callerEmail,
   };
 };
 
@@ -107,10 +144,10 @@ export const resolveReminderUserIdentity = (req) => {
  */
 export const getUserReminders = async (req, res) => {
   try {
-    const { userId, phone: rawPhone } = resolveReminderUserIdentity(req);
+    const { userId, phone: rawPhone, email: rawEmail } = resolveReminderUserIdentity(req);
     const cleanPhone = normalizePhone(rawPhone);
 
-    if (!cleanPhone && (!userId || userId === 'null' || userId === 'undefined')) {
+    if (!cleanPhone && !rawEmail && (!userId || userId === 'null' || userId === 'undefined')) {
       return res.status(200).json({
         success: true,
         message: 'No user authenticated.',
@@ -125,7 +162,7 @@ export const getUserReminders = async (req, res) => {
       });
     }
 
-    const userDocInfo = await findUserDoc(userId, rawPhone);
+    const userDocInfo = await findUserDoc(userId, rawPhone, rawEmail);
     if (!userDocInfo || !userDocInfo.data) {
       return res.status(200).json({
         success: true,
@@ -135,27 +172,13 @@ export const getUserReminders = async (req, res) => {
 
     let reminders = Array.isArray(userDocInfo.data.reminders) ? [...userDocInfo.data.reminders] : [];
 
-    // Migration fallback: if reminders array in user doc is empty, check if legacy subcollection exists
-    if (reminders.length === 0 && userDocInfo.ref) {
-      try {
-        const subSnap = await userDocInfo.ref.collection('reminders').get();
-        if (!subSnap.empty) {
-          const oldReminders = [];
-          subSnap.forEach((d) => {
-            oldReminders.push({ id: d.id, ...d.data() });
-          });
-          if (oldReminders.length > 0) {
-            await userDocInfo.ref.set({ reminders: oldReminders }, { merge: true });
-            reminders = oldReminders;
-          }
-        }
-      } catch (migErr) {
-        console.warn('[Reminders Migration Notice]:', migErr.message);
-      }
-    }
-
     // Sort newest first
     reminders.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+    // Opportunistically prune obsolete 'orders' field if present on user document
+    if (userDocInfo.data.orders !== undefined && userDocInfo.ref && FieldValue && typeof FieldValue.delete === 'function') {
+      userDocInfo.ref.update({ orders: FieldValue.delete() }).catch(() => {});
+    }
 
     return res.status(200).json({
       success: true,
@@ -181,10 +204,10 @@ export const getUserReminders = async (req, res) => {
 export const createReminder = async (req, res) => {
   try {
     const { note, occasion, date, time } = req.body;
-    const { userId, phone: rawPhone } = resolveReminderUserIdentity(req);
+    const { userId, phone: rawPhone, email: rawEmail } = resolveReminderUserIdentity(req);
     const cleanPhone = normalizePhone(rawPhone);
 
-    if (!cleanPhone && (!userId || userId === 'null' || userId === 'undefined')) {
+    if (!cleanPhone && !rawEmail && (!userId || userId === 'null' || userId === 'undefined')) {
       return res.status(401).json({
         success: false,
         message: 'User authentication required to save reminders.',
@@ -217,7 +240,7 @@ export const createReminder = async (req, res) => {
     };
 
     if (db) {
-      const userDocInfo = await findUserDoc(userId, rawPhone);
+      const userDocInfo = await findUserDoc(userId, rawPhone, rawEmail);
       let userRef;
       let currentReminders = [];
 
@@ -227,23 +250,31 @@ export const createReminder = async (req, res) => {
           currentReminders = userDocInfo.data.reminders;
         }
       } else {
-        const primaryDocId = (cleanPhone && cleanPhone.length >= 10) ? `+91${cleanPhone}` : (userId || `USR_${Date.now()}`);
+        const primaryDocId = (cleanPhone && cleanPhone.length >= 10) ? `+91${cleanPhone}` : (rawEmail || userId || `USR_${Date.now()}`);
         userRef = db.collection('users').doc(primaryDocId);
       }
 
       // Prepend the new reminder to the reminders array
       const updatedReminders = [newReminder, ...currentReminders];
 
-      await userRef.set(
-        {
-          phoneNumber: rawPhone || '',
-          uid: userId || '',
-          userId: userId || '',
-          reminders: updatedReminders,
-          updatedAt: new Date().toISOString(),
-        },
-        { merge: true }
-      );
+      const updatePayload = {
+        phoneNumber: rawPhone || '',
+        uid: userId || '',
+        userId: userId || '',
+        reminders: updatedReminders,
+        updatedAt: new Date().toISOString(),
+      };
+
+      if (rawEmail) {
+        updatePayload.email = rawEmail;
+      }
+
+      // Remove obsolete 'orders' field if present on user document
+      if (userDocInfo?.data?.orders !== undefined && FieldValue && typeof FieldValue.delete === 'function') {
+        updatePayload.orders = FieldValue.delete();
+      }
+
+      await userRef.set(updatePayload, { merge: true });
     }
 
     return res.status(201).json({
@@ -263,15 +294,15 @@ export const createReminder = async (req, res) => {
 
 /**
  * Delete Reminder from User's Reminders Array
- * DELETE /api/reminders/:id?phone=...&userId=...
+ * DELETE /api/reminders/:id
  */
 export const deleteReminder = async (req, res) => {
   try {
     const { id } = req.params;
-    const { userId, phone: rawPhone } = resolveReminderUserIdentity(req);
+    const { userId, phone: rawPhone, email: rawEmail } = resolveReminderUserIdentity(req);
     const cleanPhone = normalizePhone(rawPhone);
 
-    if (!cleanPhone && (!userId || userId === 'null' || userId === 'undefined')) {
+    if (!cleanPhone && !rawEmail && (!userId || userId === 'null' || userId === 'undefined')) {
       return res.status(401).json({
         success: false,
         message: 'Authentication required to delete reminders.',
@@ -286,20 +317,23 @@ export const deleteReminder = async (req, res) => {
     }
 
     if (db) {
-      const userDocInfo = await findUserDoc(userId, rawPhone);
+      const userDocInfo = await findUserDoc(userId, rawPhone, rawEmail);
       if (userDocInfo && userDocInfo.ref && userDocInfo.data) {
         const currentReminders = Array.isArray(userDocInfo.data.reminders)
           ? userDocInfo.data.reminders
           : [];
         const updatedReminders = currentReminders.filter((r) => String(r.id) !== String(id));
 
-        await userDocInfo.ref.set(
-          {
-            reminders: updatedReminders,
-            updatedAt: new Date().toISOString(),
-          },
-          { merge: true }
-        );
+        const updatePayload = {
+          reminders: updatedReminders,
+          updatedAt: new Date().toISOString(),
+        };
+
+        if (userDocInfo.data.orders !== undefined && FieldValue && typeof FieldValue.delete === 'function') {
+          updatePayload.orders = FieldValue.delete();
+        }
+
+        await userDocInfo.ref.set(updatePayload, { merge: true });
       }
     }
 
@@ -325,10 +359,10 @@ export const updateReminder = async (req, res) => {
   try {
     const { id } = req.params;
     const { note, occasion, date, time } = req.body;
-    const { userId, phone: rawPhone } = resolveReminderUserIdentity(req);
+    const { userId, phone: rawPhone, email: rawEmail } = resolveReminderUserIdentity(req);
     const cleanPhone = normalizePhone(rawPhone);
 
-    if (!cleanPhone && (!userId || userId === 'null' || userId === 'undefined')) {
+    if (!cleanPhone && !rawEmail && (!userId || userId === 'null' || userId === 'undefined')) {
       return res.status(401).json({
         success: false,
         message: 'Authentication required to update reminder.',
@@ -336,7 +370,7 @@ export const updateReminder = async (req, res) => {
     }
 
     if (db) {
-      const userDocInfo = await findUserDoc(userId, rawPhone);
+      const userDocInfo = await findUserDoc(userId, rawPhone, rawEmail);
       if (userDocInfo && userDocInfo.ref && userDocInfo.data) {
         const currentReminders = Array.isArray(userDocInfo.data.reminders)
           ? userDocInfo.data.reminders
@@ -355,13 +389,16 @@ export const updateReminder = async (req, res) => {
           return r;
         });
 
-        await userDocInfo.ref.set(
-          {
-            reminders: updatedReminders,
-            updatedAt: new Date().toISOString(),
-          },
-          { merge: true }
-        );
+        const updatePayload = {
+          reminders: updatedReminders,
+          updatedAt: new Date().toISOString(),
+        };
+
+        if (userDocInfo.data.orders !== undefined && FieldValue && typeof FieldValue.delete === 'function') {
+          updatePayload.orders = FieldValue.delete();
+        }
+
+        await userDocInfo.ref.set(updatePayload, { merge: true });
       }
     }
 
@@ -386,10 +423,10 @@ export const updateReminder = async (req, res) => {
 export const syncReminders = async (req, res) => {
   try {
     const { reminders } = req.body;
-    const { userId, phone: rawPhone } = resolveReminderUserIdentity(req);
+    const { userId, phone: rawPhone, email: rawEmail } = resolveReminderUserIdentity(req);
     const cleanPhone = normalizePhone(rawPhone);
 
-    if (!cleanPhone && (!userId || userId === 'null' || userId === 'undefined')) {
+    if (!cleanPhone && !rawEmail && (!userId || userId === 'null' || userId === 'undefined')) {
       return res.status(401).json({
         success: false,
         message: 'Authentication required to sync reminders.',
@@ -404,15 +441,18 @@ export const syncReminders = async (req, res) => {
     }
 
     if (db) {
-      const userDocInfo = await findUserDoc(userId, rawPhone);
+      const userDocInfo = await findUserDoc(userId, rawPhone, rawEmail);
       if (userDocInfo && userDocInfo.ref) {
-        await userDocInfo.ref.set(
-          {
-            reminders,
-            updatedAt: new Date().toISOString(),
-          },
-          { merge: true }
-        );
+        const updatePayload = {
+          reminders,
+          updatedAt: new Date().toISOString(),
+        };
+
+        if (userDocInfo.data?.orders !== undefined && FieldValue && typeof FieldValue.delete === 'function') {
+          updatePayload.orders = FieldValue.delete();
+        }
+
+        await userDocInfo.ref.set(updatePayload, { merge: true });
       }
     }
 

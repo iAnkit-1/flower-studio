@@ -6,8 +6,6 @@ import {
   getOrdersByIds,
   getInvoice,
   getOrderStatus,
-  getMockCheckout,
-  paymentCallback,
   getAllOrders,
   getOrderById,
   updateOrderStatus,
@@ -20,7 +18,6 @@ import {
   getRequestedOrders,
   createRequestedOrder,
   updateRequestedOrder,
-  createSubscription,
   cancelOrder
 } from '../controllers/orderController.js';
 import {
@@ -32,16 +29,10 @@ const router = express.Router();
 
 // --- Regular Standard Orders & Payments ---
 router.post('/', requireAuth, createOrder);
-router.post('/create-order', requireAuth, createOrder); // Alias for payment clients
 router.get('/', requireAuth, getAllOrders); // Authenticated customer (own orders) or staff (all orders)
 router.post('/verify', requireAuth, verifyPayment);
 router.post('/webhook', handleWebhook);
 router.post('/by-ids', requireAuth, getOrdersByIds);
-router.get('/mock-checkout/:orderId', getMockCheckout);
-router.get('/callback', paymentCallback);
-
-// --- Subscriptions ---
-router.post('/subscriptions', requireAuth, createSubscription);
 
 // --- Custom Orders ---
 router.get('/custom/all', requireAdminOrStaff, getCustomOrders); // Admin / staff only (401 without token, 403 for customer)

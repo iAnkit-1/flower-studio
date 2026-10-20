@@ -51,7 +51,7 @@ export const getRandomAlphanumeric = (length = 6) => {
 
 /**
  * Create Order (Server-Side Price Validation & Razorpay Order Creation)
- * POST /api/orders or POST /api/payments/create-order
+ * POST /api/orders
  */
 export const createOrder = async (req, res) => {
   const {
@@ -147,12 +147,46 @@ export const createOrder = async (req, res) => {
     }
 
     const deliveryTotalVal = parseFloat(delivery_total || 0.0);
-    const couponCode = req.body.couponCode || req.body.coupon_code || null;
-    const couponDiscountVal = parseFloat(req.body.couponDiscount || req.body.coupon_discount || 0.0);
+    const rawCoupon = req.body.couponCode || req.body.coupon_code || null;
+    let couponCode = null;
+    let couponDiscountVal = 0.0;
 
-    // Server-calculated grand total
-    const computedGrandTotal = Math.max(0.0, validatedSubtotal + deliveryTotalVal - couponDiscountVal);
-    const finalGrandTotal = computedGrandTotal > 0 ? computedGrandTotal : parseFloat(grand_total || 0.0);
+    if (rawCoupon && typeof rawCoupon === 'string' && rawCoupon.trim()) {
+      const cleanCoupon = rawCoupon.trim().toUpperCase();
+      try {
+        if (db) {
+          const docRef = db.collection('coupon_codes').doc('codes');
+          const snap = await docRef.get();
+          if (snap.exists) {
+            const data = snap.data() || {};
+            const codes = data.code || data.codes || data;
+            if (codes && typeof codes === 'object') {
+              for (const [k, v] of Object.entries(codes)) {
+                if (k.trim().toUpperCase() === cleanCoupon) {
+                  couponDiscountVal = parseFloat(v) || 0.0;
+                  couponCode = cleanCoupon;
+                  break;
+                }
+              }
+            }
+          }
+        }
+        if (couponDiscountVal === 0.0) {
+          if (cleanCoupon === 'FLAT100') {
+            couponDiscountVal = 100.0;
+            couponCode = 'FLAT100';
+          } else if (cleanCoupon === 'FLAT50') {
+            couponDiscountVal = 50.0;
+            couponCode = 'FLAT50';
+          }
+        }
+      } catch (cErr) {
+        console.warn('[Order Coupon Validation Notice]:', cErr.message);
+      }
+    }
+
+    // Server-calculated grand total (cannot be manipulated by client payload)
+    const finalGrandTotal = Math.max(0.0, validatedSubtotal + deliveryTotalVal - couponDiscountVal);
 
     const firstItem = items && items.length > 0 ? items[0] : {};
     const globalDeliveryDate = req.body.deliveryDate || req.body.delivery_date || firstItem.deliveryDate || firstItem.delivery_date || new Date().toISOString();
@@ -304,7 +338,7 @@ export const createOrder = async (req, res) => {
       razorpayOrderId: razorpayOrderId,
       amount: amountInPaise,
       currency: 'INR',
-      keyId: process.env.RAZORPAY_KEY_ID || 'rzp_live_Tlujw9WTMvsKVD',
+      keyId: process.env.RAZORPAY_KEY_ID || '',
       grandTotal: finalGrandTotal,
     });
 
@@ -381,7 +415,7 @@ export const verifyPayment = async (req, res) => {
 
     // 3. Verify Signature
     let isSigValid = false;
-    const keySecret = process.env.RAZORPAY_KEY_SECRET || '7ewgdIzkFSzl7CPRbg32UNmq';
+    const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
     const rzpOrderId = razorpay_order_id || order.razorpayOrderId || order.razorpay_order_id;
     const isDev = process.env.NODE_ENV !== 'production';
 
@@ -998,242 +1032,7 @@ export const getOrderStatus = async (req, res) => {
   }
 };
 
-/**
- * Render Mock Hosted Checkout Page
- * GET /api/orders/mock-checkout/:orderId
- */
-export const getMockCheckout = async (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).send('<h1>Not Found</h1>');
-  }
-  const { orderId } = req.params;
-  try {
-    const docSnap = await db.collection('orders').doc(orderId).get();
-    if (!docSnap.exists) {
-      return res.status(404).send('<h1>Order not found</h1>');
-    }
-    const order = docSnap.data();
 
-    const htmlContent = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>Razorpay - Secured hosted Checkout</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background-color: #0c132e;
-      color: #fff;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-      margin: 0;
-    }
-    .card {
-      background: #141d3d;
-      padding: 30px;
-      border-radius: 16px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-      width: 400px;
-      text-align: center;
-    }
-    .logo {
-      color: #0e5bff;
-      font-size: 24px;
-      font-weight: bold;
-      margin-bottom: 20px;
-    }
-    .btn {
-      background-color: #0e5bff;
-      color: white;
-      border: none;
-      padding: 12px 20px;
-      width: 100%;
-      border-radius: 8px;
-      font-weight: bold;
-      cursor: pointer;
-      margin-top: 16px;
-    }
-    .btn-secondary {
-      background-color: transparent;
-      border: 1px solid #ff4d4d;
-      color: #ff4d4d;
-      margin-top: 10px;
-    }
-    .details {
-      margin: 20px 0;
-      text-align: left;
-      font-size: 14px;
-      color: #b0b8db;
-    }
-    .row {
-      display: flex;
-      justify-content: space-between;
-      margin-bottom: 8px;
-    }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div class="logo">razorpay</div>
-    <h3>Flower Studio Hosted Payment Portal</h3>
-    <p>Simulating secure hosted checkout page</p>
-    
-    <div class="details">
-      <div class="row"><strong>Order ID:</strong> <span>${order.id}</span></div>
-      <div class="row"><strong>Customer:</strong> <span>${order.recipient_name}</span></div>
-      <div class="row"><strong>Phone:</strong> <span>${order.recipient_phone}</span></div>
-      <div class="row"><strong>Amount:</strong> <span style="color:#0e5bff;font-weight:bold;">₹${parseFloat(order.grand_total || 0).toFixed(2)}</span></div>
-    </div>
-    
-    <form action="/api/orders/callback" method="GET">
-      <input type="hidden" name="razorpay_payment_link_id" value="plink_sim_${orderId.slice(-6)}">
-      <input type="hidden" name="razorpay_payment_link_reference_id" value="${order.id}">
-      <input type="hidden" name="razorpay_payment_link_status" value="paid">
-      <input type="hidden" name="razorpay_payment_id" value="pay_sim_${Math.random().toString(36).substr(2, 9)}">
-      <input type="hidden" name="razorpay_signature" value="simulated_signature_ok">
-      <input type="hidden" name="isSimulated" value="true">
-      <button class="btn" type="submit">AUTHORIZE SECURE PAYMENT</button>
-    </form>
-    
-    <button class="btn btn-secondary" onclick="window.close();">CANCEL PAYMENT</button>
-  </div>
-</body>
-</html>
-    `;
-    return res.status(200).send(htmlContent);
-  } catch (error) {
-    console.error('Error serving mock checkout:', error);
-    return res.status(500).send('<h1>Server error loading checkout</h1>');
-  }
-};
-
-/**
- * Handle Razorpay Hosted Payment Callback
- * GET /api/orders/callback
- */
-export const paymentCallback = async (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(403).send('<h1>Forbidden: Callback simulation is disabled in production</h1>');
-  }
-  const {
-    razorpay_payment_id,
-    razorpay_payment_link_id,
-    razorpay_payment_link_reference_id,
-    razorpay_payment_link_status,
-    razorpay_signature,
-    isSimulated
-  } = req.query;
-
-  const orderId = razorpay_payment_link_reference_id;
-
-  try {
-    const docRef = db.collection('orders').doc(orderId);
-    const docSnap = await docRef.get();
-    if (!docSnap.exists) {
-      return res.status(404).send('<h1>Order not found</h1>');
-    }
-
-    if (isSimulated === 'true' || razorpay_signature === 'simulated_signature_ok') {
-      await docRef.update({
-        payment_status: 'paid',
-        paymentStatus: 'PAID',
-        orderStatus: 'CONFIRMED',
-        status: 'CONFIRMED',
-        razorpay_payment_id: razorpay_payment_id || 'pay_sim',
-        razorpayPaymentId: razorpay_payment_id || 'pay_sim',
-        razorpay_signature: razorpay_signature || 'sim_sig',
-        delivery_status: 'handcrafting',
-        updatedAt: new Date().toISOString()
-      });
-      const orderData = docSnap.data();
-      await _deductOrderStock(docRef, orderData.items, orderData);
-    } else {
-      const text = razorpay_payment_link_id + '|' + razorpay_payment_link_reference_id + '|' + razorpay_payment_link_status + '|' + razorpay_payment_id;
-      const expectedSig = crypto
-        .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
-        .update(text.toString())
-        .digest('hex');
-
-      if (expectedSig === razorpay_signature && razorpay_payment_link_status === 'paid') {
-        await docRef.update({
-          payment_status: 'paid',
-          paymentStatus: 'PAID',
-          orderStatus: 'CONFIRMED',
-          status: 'CONFIRMED',
-          razorpay_payment_id: razorpay_payment_id,
-          razorpayPaymentId: razorpay_payment_id,
-          razorpay_signature: razorpay_signature,
-          delivery_status: 'handcrafting',
-          updatedAt: new Date().toISOString()
-        });
-        const orderData = docSnap.data();
-        await _deductOrderStock(docRef, orderData.items, orderData);
-      } else {
-        await docRef.update({ payment_status: 'failed', paymentStatus: 'FAILED', updatedAt: new Date().toISOString() });
-        return res.status(400).send('<h1>Payment Verification Failed</h1>');
-      }
-    }
-
-    const htmlSuccess = `
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Payment Successful</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      text-align: center;
-      background-color: #faf6f0;
-      color: #2b2d42;
-      padding-top: 100px;
-    }
-    .container {
-      background: white;
-      max-width: 500px;
-      margin: 0 auto;
-      padding: 40px;
-      border-radius: 20px;
-      box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-      border: 1px solid #eeeeee;
-    }
-    .icon {
-      color: #2d6a4f;
-      font-size: 64px;
-      margin-bottom: 20px;
-    }
-    .btn {
-      background-color: #6e0d25;
-      color: white;
-      text-decoration: none;
-      padding: 12px 24px;
-      border-radius: 12px;
-      font-weight: bold;
-      display: inline-block;
-      margin-top: 30px;
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="icon">✔</div>
-    <h2>Payment Completed Successfully!</h2>
-    <p>Your payment for Order <strong>${orderId}</strong> was verified and processed.</p>
-    <p>You can close this tab/window and return to the Flower Studio app.</p>
-    <button class="btn" onclick="window.close();">CLOSE WINDOW</button>
-  </div>
-</body>
-</html>
-    `;
-    return res.status(200).send(htmlSuccess);
-
-  } catch (error) {
-    console.error('Error verifying callback payment:', error);
-    return res.status(500).send('<h1>Internal Server Error confirming payment</h1>');
-  }
-};
 
 /**
  * Format raw Firestore order document into normalized order response
@@ -2118,24 +1917,5 @@ export const updateRequestedOrder = async (req, res) => {
   } catch (err) {
     console.error('Error updating requested order in Firestore:', err);
     return res.status(500).json({ success: false, message: 'Failed to update requested order status.', error: err.message });
-  }
-};
-
-// Create daily flower subscription request
-export const createSubscription = async (req, res) => {
-  try {
-    const subDoc = {
-      ...req.body,
-      id: `SUB-${Date.now().toString().slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`,
-      status: req.body.status || 'pending_confirmation',
-      createdAt: new Date().toISOString()
-    };
-    if (db) {
-      await db.collection('subscriptions').add(subDoc);
-    }
-    return res.status(201).json({ success: true, message: 'Subscription created successfully!', subscription: subDoc });
-  } catch (err) {
-    console.error('Error creating subscription:', err);
-    return res.status(500).json({ success: false, message: 'Failed to create subscription.', error: err.message });
   }
 };

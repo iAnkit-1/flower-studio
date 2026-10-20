@@ -383,7 +383,7 @@ export const createCustomerSubscriptionOrder = async (req, res) => {
       razorpayOrderId: razorpayOrderId,
       amount: amountInPaise,
       currency: 'INR',
-      keyId: process.env.RAZORPAY_KEY_ID || 'rzp_live_Tlujw9WTMvsKVD',
+      keyId: process.env.RAZORPAY_KEY_ID || '',
       grandTotal: planPrice,
       subscription: subscriptionDoc,
     });
@@ -442,7 +442,7 @@ export const verifyCustomerSubscriptionPayment = async (req, res) => {
     }
 
     let isValid = false;
-    const keySecret = process.env.RAZORPAY_KEY_SECRET || '7ewgdIzkFSzl7CPRbg32UNmq';
+    const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
     const rzpOrderId = razorpay_order_id || subData.razorpayOrderId;
 
     if (rzpOrderId && razorpay_payment_id && razorpay_signature) {

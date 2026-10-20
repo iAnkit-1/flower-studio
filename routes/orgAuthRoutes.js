@@ -15,21 +15,16 @@ import { verifyJWT, requireAdmin } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// Public — no JWT needed
-router.post('/login',             orgLogin);
+// Public Authentication — /api/org/auth/...
 router.post('/auth/login',        orgLogin);
-router.post('/logout',            orgLogout);
 router.post('/auth/logout',       orgLogout);
-router.post('/verify-token',      verifyOrgToken);
 router.post('/auth/verify-token', verifyOrgToken);
 
-// Protected — requires valid JWT
-router.get('/me',                  verifyJWT, getStaffMe);
+// Protected Staff Session — /api/org/auth/...
 router.get('/auth/me',             verifyJWT, getStaffMe);
-router.get('/firebase-token',      verifyJWT, getStaffFirebaseToken);
 router.get('/auth/firebase-token', verifyJWT, getStaffFirebaseToken);
 
-// Admin-only Staff Management
+// Admin-only Staff Management — /api/org/staff
 router.get('/staff',              requireAdmin, getAllStaff);
 router.post('/staff',             requireAdmin, createStaff);
 router.put('/staff/:id/password', requireAdmin, updateStaffPassword);

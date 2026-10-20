@@ -65,26 +65,35 @@ export const createNotifyRequest = async (req, res) => {
     // 2. Duplicate request check (Idempotency)
     // Check if user (by userId or phone) already requested notification for this product
     try {
-      let existingQuery = db.collection('notify_items').where('productId', '==', cleanProductId);
-      const snapshot = await existingQuery.get();
-
-      if (!snapshot.empty) {
-        const alreadyExists = snapshot.docs.some((doc) => {
-          const data = doc.data();
-          const matchesUser = userId && data.userId === userId;
-          const matchesPhone = cleanPhone && data.customerPhone === cleanPhone;
-          const matchesEmail = cleanEmail && data.customerEmail === cleanEmail;
-          const isActive = data.status === 'pending' || data.status === 'requested';
-          return (matchesUser || matchesPhone || matchesEmail) && isActive;
-        });
-
-        if (alreadyExists) {
-          return res.status(200).json({
-            success: true,
-            alreadyRequested: true,
-            message: 'Notification request already received! We will notify you when back in stock.',
-          });
+      let alreadyExists = false;
+      if (userId) {
+        const uSnap = await db.collection('notify_items')
+          .where('productId', '==', cleanProductId)
+          .where('userId', '==', userId)
+          .limit(1)
+          .get();
+        if (!uSnap.empty) {
+          const st = uSnap.docs[0].data()?.status;
+          if (st === 'pending' || st === 'requested') alreadyExists = true;
         }
+      } else if (cleanPhone) {
+        const pSnap = await db.collection('notify_items')
+          .where('productId', '==', cleanProductId)
+          .where('customerPhone', '==', cleanPhone)
+          .limit(1)
+          .get();
+        if (!pSnap.empty) {
+          const st = pSnap.docs[0].data()?.status;
+          if (st === 'pending' || st === 'requested') alreadyExists = true;
+        }
+      }
+
+      if (alreadyExists) {
+        return res.status(200).json({
+          success: true,
+          alreadyRequested: true,
+          message: 'Notification request already received! We will notify you when back in stock.',
+        });
       }
     } catch (checkErr) {
       console.warn('[Notify Controller] Duplicate check error (proceeding to save):', checkErr.message);

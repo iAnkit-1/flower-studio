@@ -11,52 +11,35 @@ import { normalizePhone, verifyFirebaseIdToken, JWT_SECRET } from '../middleware
 export const verifyFirebaseToken = async (req, res) => {
   const { idToken, phoneNumber, fullName, email, uid } = req.body;
 
-  if (!idToken && !phoneNumber && !email) {
-    return res.status(400).json({
+  if (!idToken || typeof idToken !== 'string' || !idToken.trim()) {
+    return res.status(401).json({
       success: false,
-      message: 'Firebase ID Token, Mobile Number, or Email is required.'
+      message: 'Authentication failed. Firebase ID Token is required.',
+      code: 'UNAUTHORIZED'
     });
   }
 
   try {
-    let decodedToken = null;
-    let extractedPhone = phoneNumber ? phoneNumber.trim() : '';
-
-    if (idToken) {
-      try {
-        decodedToken = await verifyFirebaseIdToken(idToken);
-        if (decodedToken?.phone_number) {
-          extractedPhone = decodedToken.phone_number;
-        }
-      } catch (authErr) {
-        console.warn('[Firebase verifyIdToken Warning]:', authErr.message);
-      }
+    const decodedToken = await verifyFirebaseIdToken(idToken.trim());
+    if (!decodedToken || !decodedToken.uid) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid or expired Firebase authentication token.',
+        code: 'UNAUTHORIZED'
+      });
     }
 
-    let firebaseUid = decodedToken?.uid || (uid ? String(uid).trim() : '');
+    let extractedPhone = decodedToken.phone_number || (phoneNumber ? phoneNumber.trim() : '');
+    let firebaseUid = decodedToken.uid;
 
-    // Fallback: If UID not found from token (e.g. client sent Google OAuth ID token or un-updated app),
-    // look up the user record directly in Firebase Auth by email or phone
-    if (!firebaseUid && admin && typeof admin.auth === 'function') {
-      const cleanEmail = (email || decodedToken?.email || '').trim();
-      if (cleanEmail) {
-        try {
-          const userRec = await admin.auth().getUserByEmail(cleanEmail);
-          if (userRec?.uid) {
-            firebaseUid = userRec.uid;
-            console.log(`[Firebase Auth Sync] Recovered UID ${firebaseUid} for email ${cleanEmail}`);
-          }
-        } catch (_) {}
-      }
-      if (!firebaseUid && extractedPhone) {
-        try {
-          const userRec = await admin.auth().getUserByPhoneNumber(extractedPhone);
-          if (userRec?.uid) {
-            firebaseUid = userRec.uid;
-            console.log(`[Firebase Auth Sync] Recovered UID ${firebaseUid} for phone ${extractedPhone}`);
-          }
-        } catch (_) {}
-      }
+    // Additional recovery if phone wasn't in token claims
+    if (!extractedPhone && admin && typeof admin.auth === 'function') {
+      try {
+        const userRec = await admin.auth().getUser(firebaseUid);
+        if (userRec?.phoneNumber) {
+          extractedPhone = userRec.phoneNumber;
+        }
+      } catch (_) {}
     }
 
     const phone10 = normalizePhone(extractedPhone);
@@ -104,15 +87,17 @@ export const verifyFirebaseToken = async (req, res) => {
           modified = true;
         }
 
-        // Clean out legacy obsolete 'id' and 'address' fields
-        if (userProfile.id !== undefined || userProfile.address !== undefined) {
+        // Clean out legacy obsolete 'id', 'address', and 'orders' fields
+        if (userProfile.id !== undefined || userProfile.address !== undefined || userProfile.orders !== undefined) {
           if (FieldValue && typeof FieldValue.delete === 'function') {
             updateData.id = FieldValue.delete();
             updateData.address = FieldValue.delete();
+            updateData.orders = FieldValue.delete();
             modified = true;
           }
           delete userProfile.id;
           delete userProfile.address;
+          delete userProfile.orders;
         }
 
         if (cleanPhone && !userProfile.phoneNumber) {
@@ -136,6 +121,7 @@ export const verifyFirebaseToken = async (req, res) => {
           userProfile = (await userRef.get()).data();
           delete userProfile.id;
           delete userProfile.address;
+          delete userProfile.orders;
         }
       }
     }
@@ -149,9 +135,10 @@ export const verifyFirebaseToken = async (req, res) => {
     };
     const signedCustomerToken = jwt.sign(customerPayload, JWT_SECRET, { expiresIn: '30d' });
 
-    // Ensure clean response payload without id or address
+    // Ensure clean response payload without id, address or orders
     delete userProfile.id;
     delete userProfile.address;
+    delete userProfile.orders;
 
     return res.status(200).json({
       success: true,
@@ -205,10 +192,17 @@ export const getUserProfile = async (req, res) => {
 
   try {
     if (db) {
-      const userDocInfo = await findUserDoc(cleanPhone, cleanPhone);
+      const emailHint = req.user?.email || (cleanPhone.includes('@') ? cleanPhone : null);
+      const userDocInfo = await findUserDoc(cleanPhone, cleanPhone, emailHint);
       if (userDocInfo && userDocInfo.data) {
         const data = userDocInfo.data;
-        const { address, id, ...cleanData } = data;
+        const { address, id, orders, ...cleanData } = data;
+
+        // Prune legacy orders array from Firestore user document if present
+        if (data.orders !== undefined && userDocInfo.ref && FieldValue && typeof FieldValue.delete === 'function') {
+          userDocInfo.ref.update({ orders: FieldValue.delete() }).catch(() => {});
+        }
+
         return res.status(200).json({
           success: true,
           user: {
@@ -299,7 +293,7 @@ export const updateUserProfile = async (req, res) => {
 
   try {
     if (db) {
-      const userDocInfo = await findUserDoc(userId, cleanPhone);
+      const userDocInfo = await findUserDoc(userId, cleanPhone, email || req.user?.email);
       const userRef = userDocInfo?.ref || db.collection('users').doc(targetId);
       const userSnap = userDocInfo?.snap || (await userRef.get());
 
@@ -316,6 +310,7 @@ export const updateUserProfile = async (req, res) => {
 
         delete profilePayload.address;
         delete profilePayload.id;
+        delete profilePayload.orders;
 
         if (Array.isArray(addresses)) {
           profilePayload.addresses = addresses;
@@ -326,6 +321,7 @@ export const updateUserProfile = async (req, res) => {
         if (FieldValue && typeof FieldValue.delete === 'function') {
           profilePayload.address = FieldValue.delete();
           profilePayload.id = FieldValue.delete();
+          profilePayload.orders = FieldValue.delete();
         }
         await userRef.update(profilePayload);
       } else {
@@ -336,7 +332,7 @@ export const updateUserProfile = async (req, res) => {
       }
     }
 
-    const { address: _rmA, id: _rmI, ...cleanResp } = profilePayload;
+    const { address: _rmA, id: _rmI, orders: _rmO, ...cleanResp } = profilePayload;
     return res.status(200).json({
       success: true,
       message: 'User profile updated successfully!',

@@ -677,16 +677,30 @@ export const getProductById = async (req, res) => {
 */
 export const getGreetingCards = async (req, res) => {
   try {
+    const cardCategories = [
+      'Greeting Cards', 'greeting cards', 'Greeting Card', 'greeting card',
+      'Cards', 'cards', 'Card', 'card'
+    ];
     let snapshot;
     try {
       snapshot = await db
         .collection('products')
-        .orderBy('createdAt', 'desc')
+        .where('category', 'in', cardCategories)
+        .limit(100)
         .get();
-    } catch (orderErr) {
-      snapshot = await db
-        .collection('products')
-        .get();
+    } catch (_) {
+      try {
+        snapshot = await db
+          .collection('products')
+          .orderBy('createdAt', 'desc')
+          .limit(150)
+          .get();
+      } catch (orderErr) {
+        snapshot = await db
+          .collection('products')
+          .limit(150)
+          .get();
+      }
     }
 
     const isStaff = Boolean(req.user?.isStaff);
@@ -757,16 +771,31 @@ export const getGreetingCards = async (req, res) => {
 */
 export const getCelebrationProducts = async (req, res) => {
   try {
+    const celebrationCategories = [
+      'Cake Toppers', 'cake toppers', 'Cake Topper', 'cake topper',
+      'Cake Accessories', 'cake accessories', 'Cake Accessory', 'cake accessory',
+      'Party', 'party', 'Accessories', 'accessories', 'Celebration', 'celebration'
+    ];
     let snapshot;
     try {
       snapshot = await db
         .collection('products')
-        .orderBy('createdAt', 'desc')
+        .where('category', 'in', celebrationCategories)
+        .limit(100)
         .get();
-    } catch (orderErr) {
-      snapshot = await db
-        .collection('products')
-        .get();
+    } catch (_) {
+      try {
+        snapshot = await db
+          .collection('products')
+          .orderBy('createdAt', 'desc')
+          .limit(150)
+          .get();
+      } catch (orderErr) {
+        snapshot = await db
+          .collection('products')
+          .limit(150)
+          .get();
+      }
     }
 
     const allMapped = snapshot.docs.map((doc) => {

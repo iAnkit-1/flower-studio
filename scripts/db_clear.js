@@ -32,6 +32,12 @@ const clearCollection = async (collectionName) => {
 };
 
 const clearAllDatabase = async () => {
+  if (process.env.CONFIRM_WIPE_DATABASE !== 'YES_WIPE_ALL_DATA') {
+    console.error('SAFETY BLOCKED: db_clear.js requires CONFIRM_WIPE_DATABASE=YES_WIPE_ALL_DATA to run.');
+    console.error('Aborting execution to protect production database.');
+    process.exit(1);
+  }
+
   console.log('==================================================');
   console.log('Wiping all collections in Firestore (flower-studio-37861)...');
   console.log('==================================================');

@@ -19,8 +19,6 @@ import favoriteRoutes          from './routes/favoriteRoutes.js';
 import subscriptionRoutes      from './routes/subscriptionRoutes.js';
 import notifyRoutes            from './routes/notifyRoutes.js';
 import notificationRoutes      from './routes/notificationRoutes.js';
-import { seedDeliveryCharges } from './controllers/deliveryChargesController.js';
-import { seedCouponCodes }     from './controllers/couponController.js';
 
 dotenv.config();
 
@@ -142,35 +140,23 @@ app.use('/api/payments',                 paymentRoutes);
 app.use('/api/support',                  supportRoutes);
 app.use('/api/delivery-charges',         deliveryChargesRoutes);
 app.use('/api/coupons',                  couponRoutes);
-app.use('/api/coupon-codes',             couponRoutes);
-app.use('/coupons',                      couponRoutes);
 app.use('/api/reminders',                reminderRoutes);
 app.use('/api/favorites',                favoriteRoutes);
 app.use('/api/account-deletion-request',  accountDeletionRoutes);
-app.use('/api/account-deletion-requests', accountDeletionRoutes);
-app.use('/api/account',                  accountDeletionRoutes);
 app.use('/api/subscriptions',            subscriptionRoutes);
 app.use('/api/notify-items',             notifyRoutes);
-app.use('/api/notify',                   notifyRoutes);
 app.use('/api/notifications',            notificationRoutes);
 
 // Organization routes (Custom JWT)
-app.use('/api/org/auth', orgAuthRoutes);
-app.use('/api/org',      orgAuthRoutes);
-
-// Seed Firestore collections with defaults on startup
-try {
-  seedDeliveryCharges();
-  seedCouponCodes();
-} catch (e) {
-  console.warn('[Seed Delivery Charges / Coupons]:', e.message);
-}
+app.use('/api/org', orgAuthRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', message: 'Flower Studio Backend is running on Cloudflare Workers / Node.js' });
 });
 
-// Cloudflare Workers HTTP Server Handler
-app.listen(3000);
-export default httpServerHandler({ port: 3000 });
+// Server Handler
+app.listen(PORT, () => {
+  console.log(`[Flower Studio Backend] Server listening on port ${PORT}`);
+});
+export default httpServerHandler({ port: PORT });

@@ -81,62 +81,6 @@ export const getNotifications = async (req, res) => {
       notifications.push({ id: doc.id, ...data });
     });
 
-    // Auto-sync: Check recent orders to ensure no incoming orders are missed
-    try {
-      const recentOrdersSnap = await db.collection('orders')
-        .orderBy('createdAt', 'desc')
-        .limit(10)
-        .get();
-
-      const newDocsToInsert = [];
-      recentOrdersSnap.forEach((oDoc) => {
-        const oData = oDoc.data();
-        const oId = String(oData.orderId || oDoc.id);
-        const status = (oData.orderStatus || oData.status || '').toUpperCase();
-
-        if (['PLACED', 'CONFIRMED', 'HANDCRAFTING', 'READY_FOR_PICKUP'].includes(status) && !existingOrderIds.has(oId)) {
-          const grandTotal = Number(oData.grand_total || oData.grandTotal || 0);
-          const paymentMethod = String(oData.payment_method || oData.paymentMethod || 'COD').toUpperCase();
-          const customerName = oData.recipient_name || oData.recipientName || oData.customerName || 'Customer';
-          const customerPhone = oData.recipient_phone || oData.recipientPhone || '';
-          const itemsCount = Array.isArray(oData.items) ? oData.items.length : 1;
-          const createdAt = oData.createdAt || oData.created_at || new Date().toISOString();
-
-          const notifDoc = {
-            type: 'NEW_ORDER',
-            orderId: oId,
-            title: '🚨 NEW ORDER RECEIVED!',
-            body: `Order #${oId} • ₹${grandTotal} (${paymentMethod}) • ${customerName}`,
-            customerName,
-            customerPhone,
-            grandTotal,
-            paymentMethod,
-            itemsCount,
-            isRead: false,
-            soundType: 'buzzer',
-            createdAt,
-            updatedAt: new Date().toISOString(),
-          };
-
-          newDocsToInsert.push({ ref: db.collection('notifications').doc(`notif_${oId}`), data: notifDoc });
-          existingOrderIds.add(oId);
-          unreadCount++;
-        }
-      });
-
-      if (newDocsToInsert.length > 0) {
-        const batch = db.batch();
-        newDocsToInsert.forEach(({ ref, data }) => {
-          batch.set(ref, data);
-          notifications.unshift({ id: ref.id, ...data });
-        });
-        await batch.commit();
-        notifications.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      }
-    } catch (syncErr) {
-      console.warn('[Notification Controller] Auto-sync recent orders notice:', syncErr.message);
-    }
-
     return res.status(200).json({
       success: true,
       notifications,
@@ -260,7 +204,8 @@ export const registerToken = async (req, res) => {
 
     // Customer device token registration
     const customerId = userId || req.user?.uid;
-    const userDocInfo = await findUserDoc(customerId, phone);
+    const callerEmail = req.user?.email || req.body?.email || '';
+    const userDocInfo = await findUserDoc(customerId, phone, callerEmail);
     if (userDocInfo && userDocInfo.ref) {
       const existingTokens = userDocInfo.data?.fcmTokens || [];
       const updatedTokens = [...new Set([...existingTokens, fcmToken])];
@@ -272,7 +217,7 @@ export const registerToken = async (req, res) => {
       console.log(`[Notification Controller] Successfully attached FCM token to customer user: ${userDocInfo.id}`);
     } else {
       const cleanPhone = phone ? phone.replace(/\D/g, '').slice(-10) : '';
-      const docId = (cleanPhone && cleanPhone.length >= 10) ? `+91${cleanPhone}` : (customerId || fcmToken.slice(-32));
+      const docId = (cleanPhone && cleanPhone.length >= 10) ? `+91${cleanPhone}` : (callerEmail || customerId || fcmToken.slice(-32));
       await db.collection('users').doc(docId).set({
         uid: customerId || '',
         fcmToken,

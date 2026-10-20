@@ -1,146 +1,30 @@
 import db from '../config/db.js';
-import { findUserDoc } from './reminderController.js';
-import { normalizePhone } from '../middleware/authMiddleware.js';
+import { getUserProfile, updateUserProfile } from './authController.js';
 
 /**
  * GET /api/users/me
- * Authenticated customer: retrieves caller's own profile only
+ * Authenticated customer: delegates to the unified getUserProfile in authController
  */
 export const getCurrentUserProfile = async (req, res) => {
-  try {
-    const userId = req.user?.userId || req.user?.uid;
-    const phone = req.user?.phoneNumber || '';
-
-    if (!userId && !phone) {
-      return res.status(401).json({
-        success: false,
-        message: 'Authentication session does not contain a valid user identity.'
-      });
-    }
-
-    if (db) {
-      const userDocInfo = await findUserDoc(userId, phone);
-      if (userDocInfo && userDocInfo.data) {
-        const data = userDocInfo.data;
-        const { address, id, ...cleanData } = data;
-        return res.status(200).json({
-          success: true,
-          user: {
-            uid: data.uid || userId || '',
-            ...cleanData,
-            fullName: data.fullName || req.user?.name || '',
-            phoneNumber: data.phoneNumber || phone,
-            email: data.email || req.user?.email || '',
-            alternateNumber: data.alternateNumber || '',
-            addresses: Array.isArray(data.addresses) ? data.addresses : [],
-            reminders: Array.isArray(data.reminders) ? data.reminders : [],
-            createdAt: data.createdAt || null,
-            updatedAt: data.updatedAt || null,
-          }
-        });
-      }
-    }
-
-    // Default clean profile if record does not yet exist
-    return res.status(200).json({
-      success: true,
-      user: {
-        uid: userId || '',
-        fullName: req.user?.name || 'Flower Customer',
-        phoneNumber: phone || '',
-        email: req.user?.email || '',
-        alternateNumber: '',
-        addresses: [],
-        reminders: [],
-      }
-    });
-
-  } catch (error) {
-    console.error('[getCurrentUserProfile Error]:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to retrieve profile.',
-      error: error.message
-    });
+  if (!req.params.phoneNumber) {
+    req.params.phoneNumber = req.user?.phoneNumber || req.user?.uid || req.user?.userId;
   }
+  return getUserProfile(req, res);
 };
 
 /**
  * PATCH /api/users/me (or PUT /api/users/me)
- * Authenticated customer: updates allowlisted profile fields only
+ * Authenticated customer: delegates to the unified updateUserProfile in authController
  */
 export const updateCurrentUserProfile = async (req, res) => {
-  try {
-    const userId = req.user?.userId || req.user?.uid;
-    const phone = req.user?.phoneNumber || '';
-
-    if (!userId && !phone) {
-      return res.status(401).json({
-        success: false,
-        message: 'Authentication session does not contain a valid user identity.'
-      });
-    }
-
-    // Strict allowlist: prevent privilege escalation or tampering with internal fields
-    const ALLOWLISTED_FIELDS = ['fullName', 'email', 'alternateNumber', 'addresses', 'reminders'];
-    const updatePayload = {};
-
-    for (const field of ALLOWLISTED_FIELDS) {
-      if (req.body[field] !== undefined) {
-        updatePayload[field] = req.body[field];
-      }
-    }
-
-    updatePayload.updatedAt = new Date().toISOString();
-
-    if (db) {
-      const userDocInfo = await findUserDoc(userId, phone);
-      let userRef;
-      if (userDocInfo && userDocInfo.ref) {
-        userRef = userDocInfo.ref;
-        await userRef.set(updatePayload, { merge: true });
-      } else {
-        const cleanPhone = normalizePhone(phone);
-        const docId = (cleanPhone && cleanPhone.length >= 10) ? `+91${cleanPhone}` : (userId || `USR_${Date.now()}`);
-        userRef = db.collection('users').doc(docId);
-        await userRef.set({
-          uid: userId || '',
-          phoneNumber: phone || '',
-          email: req.user?.email || '',
-          addresses: [],
-          reminders: [],
-          createdAt: new Date().toISOString(),
-          ...updatePayload
-        }, { merge: true });
-      }
-
-      const updatedSnap = await userRef.get();
-      const updatedData = updatedSnap.data() || {};
-      const { address, id, ...cleanUser } = updatedData;
-      return res.status(200).json({
-        success: true,
-        message: 'Profile updated successfully.',
-        user: {
-          uid: updatedData.uid || userId || '',
-          ...cleanUser,
-        }
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: 'Profile updated successfully.',
-      user: updatePayload
-    });
-
-  } catch (error) {
-    console.error('[updateCurrentUserProfile Error]:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to update user profile.',
-      error: error.message
-    });
+  req.body = req.body || {};
+  if (!req.body.phoneNumber && req.user?.phoneNumber) {
+    req.body.phoneNumber = req.user.phoneNumber;
   }
+  if (!req.body.userId && (req.user?.uid || req.user?.userId)) {
+    req.body.userId = req.user.uid || req.user.userId;
+  }
+  return updateUserProfile(req, res);
 };
 
 /**
