@@ -573,6 +573,21 @@ export async function sendCustomerOrderStatusAlert({
               },
             },
           },
+          webpush: {
+            headers: {
+              Urgency: 'high',
+            },
+            notification: {
+              title,
+              body,
+              icon: '/logo.png',
+              badge: '/logo.png',
+              tag: `order_${orderId}`,
+            },
+            fcm_options: {
+              link: `/orders/${orderId}`,
+            },
+          },
         })
       )
     );
