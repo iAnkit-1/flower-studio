@@ -274,6 +274,7 @@ export const registerToken = async (req, res) => {
       const cleanPhone = phone ? phone.replace(/\D/g, '').slice(-10) : '';
       const docId = (cleanPhone && cleanPhone.length >= 10) ? `+91${cleanPhone}` : (customerId || fcmToken.slice(-32));
       await db.collection('users').doc(docId).set({
+        uid: customerId || '',
         fcmToken,
         fcmTokens: [fcmToken],
         phoneNumber: cleanPhone ? `+91${cleanPhone}` : '',

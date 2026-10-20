@@ -149,4 +149,6 @@ export const admin = {
   apps: [{ name: 'default' }],
 };
 
+export { FieldValue } from '@ljoukov/firebase-admin-cloudflare/firestore';
+
 export default dbProxy;

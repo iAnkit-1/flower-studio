@@ -22,23 +22,16 @@ export const getCurrentUserProfile = async (req, res) => {
       const userDocInfo = await findUserDoc(userId, phone);
       if (userDocInfo && userDocInfo.data) {
         const data = userDocInfo.data;
+        const { address, id, ...cleanData } = data;
         return res.status(200).json({
           success: true,
           user: {
-            id: data.id || userDocInfo.id,
-            userId: data.userId || userId,
+            uid: data.uid || userId || '',
+            ...cleanData,
             fullName: data.fullName || req.user?.name || '',
             phoneNumber: data.phoneNumber || phone,
             email: data.email || req.user?.email || '',
             alternateNumber: data.alternateNumber || '',
-            address: data.address || {
-              houseNo: '',
-              streetName: '',
-              district: '',
-              state: '',
-              pincode: '',
-              addressType: 'Home'
-            },
             addresses: Array.isArray(data.addresses) ? data.addresses : [],
             reminders: Array.isArray(data.reminders) ? data.reminders : [],
             createdAt: data.createdAt || null,
@@ -49,24 +42,14 @@ export const getCurrentUserProfile = async (req, res) => {
     }
 
     // Default clean profile if record does not yet exist
-    const cleanPhone = normalizePhone(phone);
     return res.status(200).json({
       success: true,
       user: {
-        id: userId || (cleanPhone ? `USR-${cleanPhone}` : `USR-${Date.now()}`),
-        userId: userId || '',
+        uid: userId || '',
         fullName: req.user?.name || 'Flower Customer',
         phoneNumber: phone || '',
         email: req.user?.email || '',
         alternateNumber: '',
-        address: {
-          houseNo: '',
-          streetName: '',
-          district: '',
-          state: '',
-          pincode: '',
-          addressType: 'Home'
-        },
         addresses: [],
         reminders: [],
       }
@@ -99,7 +82,7 @@ export const updateCurrentUserProfile = async (req, res) => {
     }
 
     // Strict allowlist: prevent privilege escalation or tampering with internal fields
-    const ALLOWLISTED_FIELDS = ['fullName', 'email', 'alternateNumber', 'address', 'addresses', 'reminders'];
+    const ALLOWLISTED_FIELDS = ['fullName', 'email', 'alternateNumber', 'addresses', 'reminders'];
     const updatePayload = {};
 
     for (const field of ALLOWLISTED_FIELDS) {
@@ -121,8 +104,7 @@ export const updateCurrentUserProfile = async (req, res) => {
         const docId = (cleanPhone && cleanPhone.length >= 10) ? `+91${cleanPhone}` : (userId || `USR_${Date.now()}`);
         userRef = db.collection('users').doc(docId);
         await userRef.set({
-          id: userId || docId,
-          userId: userId || '',
+          uid: userId || '',
           phoneNumber: phone || '',
           email: req.user?.email || '',
           addresses: [],
@@ -133,10 +115,15 @@ export const updateCurrentUserProfile = async (req, res) => {
       }
 
       const updatedSnap = await userRef.get();
+      const updatedData = updatedSnap.data() || {};
+      const { address, id, ...cleanUser } = updatedData;
       return res.status(200).json({
         success: true,
         message: 'Profile updated successfully.',
-        user: updatedSnap.data()
+        user: {
+          uid: updatedData.uid || userId || '',
+          ...cleanUser,
+        }
       });
     }
 

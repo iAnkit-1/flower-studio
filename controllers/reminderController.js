@@ -237,6 +237,7 @@ export const createReminder = async (req, res) => {
       await userRef.set(
         {
           phoneNumber: rawPhone || '',
+          uid: userId || '',
           userId: userId || '',
           reminders: updatedReminders,
           updatedAt: new Date().toISOString(),
