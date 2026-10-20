@@ -1,5 +1,62 @@
 import db from '../config/db.js';
 import { sendBroadcastPush } from '../services/fcmService.js';
+import { findUserDoc } from './reminderController.js';
+
+// Connected Server-Sent Events (SSE) clients for real-time staff alerts (Org Web)
+const sseClients = new Set();
+
+/**
+ * GET /api/notifications/stream
+ * Server-Sent Events (SSE) stream for real-time staff alerts (Org Web)
+ * Zero polling, 0 Firestore reads, immediate delivery (<10ms).
+ */
+export const notificationStream = (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+    'Access-Control-Allow-Origin': req.headers.origin || '*',
+    'Access-Control-Allow-Credentials': 'true',
+  });
+
+  // Flush initial connection comment to establish stream immediately
+  res.write(': connected\n\n');
+
+  sseClients.add(res);
+
+  // Send keepalive comment every 25 seconds
+  const intervalId = setInterval(() => {
+    try {
+      res.write(': keepalive\n\n');
+    } catch (_) {
+      clearInterval(intervalId);
+    }
+  }, 25000);
+
+  req.on('close', () => {
+    clearInterval(intervalId);
+    sseClients.delete(res);
+  });
+};
+
+/**
+ * Push an event to all connected staff SSE clients immediately (0 Firestore reads)
+ */
+export const broadcastStaffSse = (eventType, payload) => {
+  if (sseClients.size === 0) return;
+
+  const dataStr = JSON.stringify({ type: eventType, ...payload });
+  const message = `event: ${eventType}\ndata: ${dataStr}\n\n`;
+
+  for (const client of sseClients) {
+    try {
+      client.write(message);
+    } catch (_) {
+      sseClients.delete(client);
+    }
+  }
+};
 
 /**
  * GET /api/notifications
@@ -201,34 +258,28 @@ export const registerToken = async (req, res) => {
       return res.status(200).json({ success: true, message: 'Staff device token registered' });
     }
 
-    // Customer device token
+    // Customer device token registration
     const customerId = userId || req.user?.uid;
-    if (customerId) {
-      const userRef = db.collection('users').doc(customerId);
-      const userDoc = await userRef.get();
-      if (userDoc.exists) {
-        const existingTokens = userDoc.data()?.fcmTokens || [];
-        const updatedTokens = [...new Set([...existingTokens, fcmToken])];
-        await userRef.update({
-          fcmToken,
-          fcmTokens: updatedTokens,
-          updatedAt: now,
-        });
-      }
-    }
-
-    if (phone) {
-      const cleanPhone = phone.replace(/\D/g, '').slice(-10);
-      const qSnap = await db.collection('users').where('phone', '==', cleanPhone).limit(1).get();
-      if (!qSnap.empty) {
-        const docRef = qSnap.docs[0].ref;
-        const existingTokens = qSnap.docs[0].data()?.fcmTokens || [];
-        await docRef.update({
-          fcmToken,
-          fcmTokens: [...new Set([...existingTokens, fcmToken])],
-          updatedAt: now,
-        });
-      }
+    const userDocInfo = await findUserDoc(customerId, phone);
+    if (userDocInfo && userDocInfo.ref) {
+      const existingTokens = userDocInfo.data?.fcmTokens || [];
+      const updatedTokens = [...new Set([...existingTokens, fcmToken])];
+      await userDocInfo.ref.set({
+        fcmToken,
+        fcmTokens: updatedTokens,
+        updatedAt: now,
+      }, { merge: true });
+      console.log(`[Notification Controller] Successfully attached FCM token to customer user: ${userDocInfo.id}`);
+    } else {
+      const cleanPhone = phone ? phone.replace(/\D/g, '').slice(-10) : '';
+      const docId = (cleanPhone && cleanPhone.length >= 10) ? `+91${cleanPhone}` : (customerId || fcmToken.slice(-32));
+      await db.collection('users').doc(docId).set({
+        fcmToken,
+        fcmTokens: [fcmToken],
+        phoneNumber: cleanPhone ? `+91${cleanPhone}` : '',
+        updatedAt: now,
+      }, { merge: true });
+      console.log(`[Notification Controller] Created user doc with FCM token: ${docId}`);
     }
 
     return res.status(200).json({ success: true, message: 'FCM Token registered successfully' });

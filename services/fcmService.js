@@ -1,5 +1,7 @@
 import { importPKCS8, SignJWT } from 'jose';
 import db from '../config/db.js';
+import { broadcastStaffSse } from '../controllers/notificationController.js';
+import { findUserDoc } from '../controllers/reminderController.js';
 
 let cachedAccessToken = null;
 let tokenExpiresAt = 0;
@@ -202,6 +204,23 @@ export async function sendStaffOrderAlert({
     console.error('[Notification Service] Error saving notification to Firestore:', fsErr.message);
   }
 
+  // Real-Time SSE to connected Org Web staff tabs (Instant <10ms buzzer, 0 Firestore reads)
+  try {
+    broadcastStaffSse('NEW_ORDER', {
+      orderId: String(orderId),
+      title,
+      body,
+      customerName,
+      customerPhone,
+      grandTotal: Number(grandTotal),
+      paymentMethod,
+      itemsCount: Number(itemsCount),
+      soundType: 'buzzer',
+    });
+  } catch (sseErr) {
+    console.warn('[FCM Service] Notice broadcasting staff SSE:', sseErr.message);
+  }
+
   // 1. Send to topic 'organization_alerts'
   try {
     await sendFcmMessage({
@@ -314,6 +333,22 @@ export async function sendStaffSupportAlert({
     console.error('[Notification Service] Error saving ticket notification to Firestore:', fsErr.message);
   }
 
+  // Real-Time SSE to connected Org Web staff tabs (Instant <10ms, 0 Firestore reads)
+  try {
+    broadcastStaffSse('SUPPORT_TICKET', {
+      ticketId: String(ticketId),
+      orderId: orderId ? String(orderId) : '',
+      title,
+      body,
+      customerName,
+      customerPhone,
+      category,
+      priority,
+    });
+  } catch (sseErr) {
+    console.warn('[FCM Service] Notice broadcasting staff ticket SSE:', sseErr.message);
+  }
+
   // 1. Send to topic 'organization_alerts'
   try {
     await sendFcmMessage({
@@ -393,29 +428,42 @@ export async function sendCustomerOrderStatusAlert({
   status,
   customMessage,
 }) {
-  const normStatus = (status || '').toUpperCase();
+  const normStatus = (status || '').toUpperCase().replace(/[\s-]+/g, '_').trim();
   let title = `Order #${orderId} Update`;
   let body = customMessage;
 
   if (!body) {
     switch (normStatus) {
+      case 'ORDER_CONFIRMED':
       case 'CONFIRMED':
-        body = 'Your order has been confirmed! Our floral designers are getting started 🌸';
+        title = `Order Confirmed! 🌸`;
+        body = `Your order #${orderId} has been confirmed! Our floral designers are preparing your fresh arrangement.`;
         break;
-      case 'HANDCRAFTING':
-        body = 'Your handcrafted bouquet is being fresh-picked and beautifully arranged 💐';
+      case 'DISPATCHED':
+      case 'SHIPPED':
+        title = `Order Dispatched! 🚀`;
+        body = `Your order #${orderId} has been dispatched from our studio and is on its way!`;
         break;
       case 'OUT_FOR_DELIVERY':
-        body = 'Out for delivery! Your fresh flowers are on the way to your door 🚚';
+        title = `Out for Delivery! 🚚`;
+        body = `Your order #${orderId} is out for delivery! Our delivery partner will arrive soon.`;
         break;
-      case 'DELIVERED':
-        body = 'Delivered! 🎉 Your order has arrived. Thank you for choosing Flower Studio!';
+      case 'OUT_FOR_PICKUP':
+      case 'READY_FOR_PICKUP':
+        title = `Ready for Pickup! 🎁`;
+        body = `Your order #${orderId} is packed and ready for pickup at Flower Studio!`;
         break;
       case 'CANCELLED':
-        body = 'Your order has been cancelled. Any eligible refund is being processed.';
+      case 'CANCELED':
+        title = `Order Cancelled`;
+        body = `Your order #${orderId} has been cancelled. Any eligible refund is being processed.`;
+        break;
+      case 'DELIVERED':
+        title = `Order Delivered! 🎉`;
+        body = `Delivered! 🎉 Your order #${orderId} has arrived. Thank you for choosing Flower Studio!`;
         break;
       default:
-        body = `Your order status is now: ${status}`;
+        body = `Your order #${orderId} status is now: ${status}`;
     }
   }
 
@@ -435,26 +483,17 @@ export async function sendCustomerOrderStatusAlert({
     });
   } catch (_) {}
 
-  // Retrieve customer FCM device tokens for THIS user ONLY
+  // Retrieve customer FCM device tokens for THIS user ONLY using robust findUserDoc
   const targetTokens = [];
   try {
-    if (customerUserId) {
-      const userDoc = await db.collection('users').doc(customerUserId).get();
-      if (userDoc.exists) {
-        const uData = userDoc.data();
-        if (uData.fcmToken) targetTokens.push(uData.fcmToken);
-        if (Array.isArray(uData.fcmTokens)) targetTokens.push(...uData.fcmTokens);
-      }
-    }
-
-    if (targetTokens.length === 0 && customerPhone) {
-      const cleanPhone = customerPhone.replace(/\D/g, '').slice(-10);
-      const qSnap = await db.collection('users').where('phone', '==', cleanPhone).limit(1).get();
-      if (!qSnap.empty) {
-        const uData = qSnap.docs[0].data();
-        if (uData.fcmToken) targetTokens.push(uData.fcmToken);
-        if (Array.isArray(uData.fcmTokens)) targetTokens.push(...uData.fcmTokens);
-      }
+    const userDocInfo = await findUserDoc(customerUserId, customerPhone);
+    if (userDocInfo && userDocInfo.data) {
+      const uData = userDocInfo.data;
+      if (uData.fcmToken) targetTokens.push(uData.fcmToken);
+      if (Array.isArray(uData.fcmTokens)) targetTokens.push(...uData.fcmTokens);
+      console.log(`[FCM Service] Found ${targetTokens.length} token(s) for customer user: ${userDocInfo.id}`);
+    } else {
+      console.log(`[FCM Service] findUserDoc found no user profile for ${customerUserId || customerPhone}`);
     }
   } catch (tokErr) {
     console.warn('[FCM Service] Error fetching customer tokens:', tokErr.message);

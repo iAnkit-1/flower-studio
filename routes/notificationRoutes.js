@@ -5,6 +5,7 @@ import {
   markAllNotificationsRead,
   triggerBroadcast,
   registerToken,
+  notificationStream,
 } from '../controllers/notificationController.js';
 import {
   optionalAuth,
@@ -12,6 +13,9 @@ import {
 } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
+
+// Real-Time Server-Sent Events (SSE) stream for staff portals (Org Web) - Zero polling, 0 Firestore reads
+router.get('/stream', notificationStream);
 
 // Device token registration (both customer app and staff portal)
 router.post('/register-token', optionalAuth, registerToken);

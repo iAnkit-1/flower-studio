@@ -1503,11 +1503,12 @@ export const updateOrderStatus = async (req, res) => {
     return res.status(400).json({ success: false, message: 'Status parameter is required.' });
   }
 
+  const normStatus = (targetStatus || '').toUpperCase().replace(/[\s-]+/g, '_').trim();
   const updateData = { orderStatus: targetStatus };
 
-  if (targetStatus === 'Cancelled' || targetStatus === 'CANCELLED') {
+  if (normStatus === 'CANCELLED' || normStatus === 'CANCELED') {
     updateData.paymentStatus = 'REFUNDED';
-  } else if (targetStatus === 'Confirmed' || targetStatus === 'CONFIRMED') {
+  } else if (normStatus === 'ORDER_CONFIRMED' || normStatus === 'CONFIRMED') {
     updateData.paymentStatus = 'PAID';
   }
 
@@ -1521,10 +1522,17 @@ export const updateOrderStatus = async (req, res) => {
     const existingData = docSnap.data();
     await docRef.update(updateData);
 
-    const normStatus = (targetStatus || '').toUpperCase();
-    if (normStatus === 'CANCELLED' || normStatus === 'REJECTED') {
+    if (normStatus === 'CANCELLED' || normStatus === 'CANCELED' || normStatus === 'REJECTED') {
       await _restoreOrderStock(docRef, existingData.items, existingData);
-    } else if (normStatus === 'CONFIRMED' || normStatus === 'PLACED' || normStatus === 'DELIVERED' || normStatus === 'HANDCRAFTING' || normStatus === 'OUT_FOR_DELIVERY') {
+    } else if (
+      normStatus === 'ORDER_CONFIRMED' ||
+      normStatus === 'CONFIRMED' ||
+      normStatus === 'DISPATCHED' ||
+      normStatus === 'OUT_FOR_DELIVERY' ||
+      normStatus === 'OUT_FOR_PICKUP' ||
+      normStatus === 'PLACED' ||
+      normStatus === 'DELIVERED'
+    ) {
       await _deductOrderStock(docRef, existingData.items, existingData);
     }
 
