@@ -403,8 +403,9 @@ export const createProduct = async (req, res) => {
   ).filter(Boolean);
 
   const productId =
-    id ||
-    `PROD-${Math.floor(1000 + Math.random() * 9000)}`;
+    (id && typeof id === 'string' && id.startsWith('PROD-') && !id.startsWith('prod_'))
+      ? id.trim()
+      : `PROD-${Date.now()}`;
 
   const productData = {
     id: productId,

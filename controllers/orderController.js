@@ -6,6 +6,48 @@ import { normalizePhone } from '../middleware/authMiddleware.js';
 import { sendStaffOrderAlert, sendCustomerOrderStatusAlert } from '../services/fcmService.js';
 import { generateReceiptHtml } from '../services/receiptService.js';
 
+/**
+ * Helper: Get current date and time in IST (Asia/Kolkata) formatted as YYYYMMDD and HHMMSS
+ */
+export const getIstDateTime = () => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date());
+
+  const get = (type) => parts.find((p) => p.type === type)?.value || '';
+  const dateStr = `${get('year')}${get('month')}${get('day')}`;
+  const timeStr = `${get('hour')}${get('minute')}${get('second')}`;
+  return { dateStr, timeStr };
+};
+
+/**
+ * Helper: Get current date in IST (Asia/Kolkata) formatted as YYYYMMDD
+ */
+export const getIstDateString = () => {
+  return getIstDateTime().dateStr;
+};
+
+// Character set for cryptographically random alphanumeric code generation
+const ALPHANUM = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+/**
+ * Generate cryptographically secure random alphanumeric string
+ */
+export const getRandomAlphanumeric = (length = 6) => {
+  const bytes = crypto.randomBytes(length);
+  let res = '';
+  for (let i = 0; i < length; i++) {
+    res += ALPHANUM[bytes[i] % ALPHANUM.length];
+  }
+  return res;
+};
 
 /**
  * Create Order (Server-Side Price Validation & Razorpay Order Creation)
@@ -34,9 +76,10 @@ export const createOrder = async (req, res) => {
     return res.status(400).json({ success: false, message: 'Required order details (recipient_name, phone, address, items) are missing.' });
   }
 
-  // Generate unique order ID
-  const randNum = Math.floor(100000 + Math.random() * 900000);
-  const orderId = `FS-${Date.now().toString().slice(-6)}-${randNum}`;
+  // Generate unique order ID: FS-YYYYMMDD-HHMMSS-xxxxxx (IST date + IST time + 6 crypto alphanumeric characters)
+  const { dateStr, timeStr } = getIstDateTime();
+  const rand6 = getRandomAlphanumeric(6);
+  const orderId = `FS-${dateStr}-${timeStr}-${rand6}`;
 
   try {
     let validatedSubtotal = 0.0;
@@ -1816,7 +1859,10 @@ export const createCustomOrder = async (req, res) => {
     return res.status(400).json({ success: false, message: 'Missing required custom order parameters.' });
   }
 
-  const id = 'CUST-' + Math.floor(1000 + Math.random() * 9000);
+  // Generate unique custom order ID: CUST-yyyymmdd-xxxx (yyyymmdd in IST + random 4 digits)
+  const istDate = getIstDateString();
+  const rand4 = Math.floor(1000 + Math.random() * 9000);
+  const id = `CUST-${istDate}-${rand4}`;
 
   let refImagesList = [];
   if (Array.isArray(referenceImages)) {
