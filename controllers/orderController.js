@@ -842,10 +842,21 @@ export const getOrdersByIds = async (req, res) => {
 
   try {
     const completedOrders = [];
+    const isStaff = Boolean(req.user?.isStaff || req.user?.isAdmin);
+    const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
+
     for (const id of orderIds) {
       const docSnap = await db.collection('orders').doc(id).get();
       if (docSnap.exists) {
-        completedOrders.push(docSnap.data());
+        const data = docSnap.data();
+        if (isStaff) {
+          completedOrders.push(data);
+        } else {
+          const orderUserId = (data.uid || data.userId || data.user_id || '').trim();
+          if (callerUserId && callerUserId === orderUserId) {
+            completedOrders.push(data);
+          }
+        }
       }
     }
 
@@ -1366,40 +1377,30 @@ export const getAllOrders = async (req, res) => {
         }
       }
     } else {
-      // Authenticated Customer: strictly isolated to own identity from verified token
-      const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
-      const callerPhone = normalizePhone(req.user?.phoneNumber || '');
+      // Authenticated Customer: strictly isolated to own identity by verified UID
+      const callerUserId = (req.user?.userId || req.user?.uid || req.query?.uid || req.query?.userId || '').trim();
 
-      if (!callerUserId && !callerPhone) {
+      if (!callerUserId) {
         return res.status(200).json({ success: true, orders: [] });
       }
 
       const matchedDocs = new Map();
 
-      if (callerUserId) {
-        try {
-          const uidSnap = await query.where('uid', '==', callerUserId).get();
-          uidSnap.docs.forEach(d => matchedDocs.set(d.id, d));
-        } catch (_) { }
-        try {
-          const uSnap = await query.where('userId', '==', callerUserId).get();
-          uSnap.docs.forEach(d => matchedDocs.set(d.id, d));
-        } catch (_) { }
-      }
+      // Query exclusively by caller's UID across matching fields (uid, userId, user_id)
+      try {
+        const uidSnap = await query.where('uid', '==', callerUserId).get();
+        uidSnap.docs.forEach(d => matchedDocs.set(d.id, d));
+      } catch (_) { }
 
-      if (callerPhone) {
-        const phoneVariants = [callerPhone, `+91${callerPhone}`, `+91 ${callerPhone}`];
-        for (const pv of phoneVariants) {
-          try {
-            const pSnap = await query.where('userPhone', '==', pv).get();
-            pSnap.docs.forEach(d => matchedDocs.set(d.id, d));
-          } catch (_) { }
-          try {
-            const rSnap = await query.where('deliveryDetails.recipientPhone', '==', pv).get();
-            rSnap.docs.forEach(d => matchedDocs.set(d.id, d));
-          } catch (_) { }
-        }
-      }
+      try {
+        const uSnap = await query.where('userId', '==', callerUserId).get();
+        uSnap.docs.forEach(d => matchedDocs.set(d.id, d));
+      } catch (_) { }
+
+      try {
+        const uSnap2 = await query.where('user_id', '==', callerUserId).get();
+        uSnap2.docs.forEach(d => matchedDocs.set(d.id, d));
+      } catch (_) { }
 
       snapshot = { docs: Array.from(matchedDocs.values()) };
     }
@@ -1464,17 +1465,12 @@ export const getOrderById = async (req, res) => {
 
     const orderData = docSnap.data();
 
-    // Enforce ownership: caller must be admin/staff OR the owner
+    // Enforce ownership: caller must be admin/staff OR the owner by UID
     if (!req.user?.isStaff && !req.user?.isAdmin) {
       const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
-      const callerPhone = normalizePhone(req.user?.phoneNumber || '');
-
       const orderUserId = (orderData.uid || orderData.userId || orderData.user_id || '').trim();
-      const orderPhone = normalizePhone(orderData.userPhone || orderData.user_phone || '');
-      const recipientPhone = normalizePhone(orderData.deliveryDetails?.recipientPhone || orderData.recipientPhone || orderData.recipient_phone || '');
 
-      const isOwner = (callerUserId && callerUserId === orderUserId) ||
-        (callerPhone && (callerPhone === orderPhone || callerPhone === recipientPhone));
+      const isOwner = Boolean(callerUserId && callerUserId === orderUserId);
 
       if (!isOwner) {
         return res.status(403).json({
@@ -1592,18 +1588,8 @@ export const cancelOrder = async (req, res) => {
 
     // Check ownership if caller is not staff/admin
     if (!req.user?.isStaff && !req.user?.isAdmin) {
-      const orderUserId = (orderData.userId || orderData.user_id || '').trim();
-      const orderPhone = normalizePhone(orderData.userPhone || orderData.user_phone || '');
-      const recipientPhone = normalizePhone(
-        orderData.deliveryDetails?.recipientPhone ||
-        orderData.recipientPhone ||
-        orderData.recipient_phone ||
-        ''
-      );
-
-      const isOwner =
-        (callerUserId && callerUserId === orderUserId) ||
-        (callerPhone && (callerPhone === orderPhone || callerPhone === recipientPhone));
+      const orderUserId = (orderData.uid || orderData.userId || orderData.user_id || '').trim();
+      const isOwner = Boolean(callerUserId && callerUserId === orderUserId);
 
       if (!isOwner) {
         return res.status(403).json({
