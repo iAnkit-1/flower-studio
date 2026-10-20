@@ -59,7 +59,12 @@ export const verifyFirebaseToken = async (req, res) => {
       }
     }
 
-    let docId = extractedPhone ? extractedPhone.trim() : (firebaseUid || email || decodedToken?.email);
+    const phone10 = normalizePhone(extractedPhone);
+    const cleanPhone = phone10 ? `+91${phone10}` : '';
+    const cleanEmail = (email || decodedToken?.email || '').trim().toLowerCase();
+
+    // Document ID: Phone number for Phone Auth, Email for Google Auth, fallback to UID
+    const docId = cleanPhone || cleanEmail || firebaseUid;
 
     if (!docId) {
       return res.status(400).json({
@@ -68,17 +73,14 @@ export const verifyFirebaseToken = async (req, res) => {
       });
     }
 
-    const cleanPhone = extractedPhone ? extractedPhone.trim() : '';
-
     let userProfile = {
       uid: firebaseUid,
       fullName: fullName || decodedToken?.name || '',
       phoneNumber: cleanPhone,
-      email: email || decodedToken?.email || '',
+      email: cleanEmail,
       alternateNumber: '',
       addresses: [],
       reminders: [],
-      orders: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -89,20 +91,20 @@ export const verifyFirebaseToken = async (req, res) => {
 
       if (!userSnap.exists) {
         await userRef.set(userProfile);
-        console.log(`[Firebase Auth Sync] Created user profile in Firestore for ${docId}`);
+        console.log(`[Firebase Auth Sync] Created user profile for ${docId}`);
       } else {
         userProfile = userSnap.data();
         const updateData = { updatedAt: new Date().toISOString() };
         let modified = false;
 
-        // Ensure uid is stored and updated (auto-heals any previously blank uid)
+        // Ensure uid field is populated
         if (firebaseUid && (!userProfile.uid || userProfile.uid !== firebaseUid)) {
           updateData.uid = firebaseUid;
           userProfile.uid = firebaseUid;
           modified = true;
         }
 
-        // Clean out obsolete 'id' and 'address' fields from existing Firestore documents
+        // Clean out legacy obsolete 'id' and 'address' fields
         if (userProfile.id !== undefined || userProfile.address !== undefined) {
           if (FieldValue && typeof FieldValue.delete === 'function') {
             updateData.id = FieldValue.delete();
@@ -113,47 +115,28 @@ export const verifyFirebaseToken = async (req, res) => {
           delete userProfile.address;
         }
 
+        if (cleanPhone && !userProfile.phoneNumber) {
+          updateData.phoneNumber = cleanPhone;
+          userProfile.phoneNumber = cleanPhone;
+          modified = true;
+        }
+        if (cleanEmail && !userProfile.email) {
+          updateData.email = cleanEmail;
+          userProfile.email = cleanEmail;
+          modified = true;
+        }
         if (fullName && !userProfile.fullName) {
           updateData.fullName = fullName;
           userProfile.fullName = fullName;
           modified = true;
         }
-        if (email && !userProfile.email) {
-          updateData.email = email;
-          userProfile.email = email;
-          modified = true;
-        }
+
         if (modified) {
           await userRef.update(updateData);
           userProfile = (await userRef.get()).data();
           delete userProfile.id;
           delete userProfile.address;
         }
-      }
-
-      // Check legacy email document for migration (only runs if an existing document was found)
-      const cleanEmail = (email || decodedToken?.email || '').trim();
-      if (userSnap.exists && cleanEmail && cleanEmail !== docId) {
-        try {
-          const emailDocRef = db.collection('users').doc(cleanEmail);
-          const emailSnap = await emailDocRef.get();
-          if (emailSnap.exists) {
-            const emailData = emailSnap.data() || {};
-            if ((!userProfile.addresses || userProfile.addresses.length === 0) && emailData.addresses) {
-              userProfile.addresses = emailData.addresses;
-            }
-            if ((!userProfile.orders || userProfile.orders.length === 0) && emailData.orders) {
-              userProfile.orders = emailData.orders;
-            }
-            if (!emailData.uid || emailData.uid !== firebaseUid) {
-              await emailDocRef.update({
-                uid: firebaseUid,
-                updatedAt: new Date().toISOString()
-              });
-              console.log(`[Firebase Auth Sync] Auto-healed blank UID on email document for ${cleanEmail}`);
-            }
-          }
-        } catch (_) {}
       }
     }
 
