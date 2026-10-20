@@ -87,7 +87,24 @@ export const createOrder = async (req, res) => {
     let validatedDiscount = 0.0;
     const validatedItems = [];
 
-    // Server-Side Price Calculation & Validation against Firestore
+    // Server-Side Price Calculation & Validation against Firestore (Parallel batch lookup)
+    const productIds = items.map(it => it.productId || it.product_id).filter(Boolean);
+    const productSnapMap = new Map();
+    if (productIds.length > 0 && db) {
+      try {
+        const uniqueIds = [...new Set(productIds)];
+        const docRefs = uniqueIds.map(id => db.collection('products').doc(id));
+        const snaps = await db.getAll(...docRefs);
+        snaps.forEach(snap => {
+          if (snap.exists) {
+            productSnapMap.set(snap.id, snap.data());
+          }
+        });
+      } catch (dbErr) {
+        console.warn('[Price Validation Notice] Parallel product lookup failed, falling back to item payloads:', dbErr.message);
+      }
+    }
+
     for (const item of items) {
       const productId = item.productId || item.product_id;
       const qty = parseInt(item.quantity || 1, 10);
@@ -97,18 +114,11 @@ export const createOrder = async (req, res) => {
       let unitOrderPrice = parseFloat(item.orderPrice || item.price || 0.0);
       let productTitle = item.productTitle || item.product_title || 'Flower Studio Product';
 
-      if (productId && db) {
-        try {
-          const productSnap = await db.collection('products').doc(productId).get();
-          if (productSnap.exists) {
-            const prodData = productSnap.data();
-            productTitle = prodData.title || productTitle;
-            unitListingPrice = parseFloat(prodData.mrp || prodData.salePrice || unitListingPrice);
-            unitOrderPrice = parseFloat(prodData.salePrice || unitOrderPrice);
-          }
-        } catch (dbErr) {
-          console.warn(`[Price Validation Notice] Product lookup failed for ${productId}, using client payload:`, dbErr.message);
-        }
+      if (productId && productSnapMap.has(productId)) {
+        const prodData = productSnapMap.get(productId);
+        productTitle = prodData.title || productTitle;
+        unitListingPrice = parseFloat(prodData.mrp || prodData.salePrice || unitListingPrice);
+        unitOrderPrice = parseFloat(prodData.salePrice || unitOrderPrice);
       }
 
       const unitDiscount = Math.max(0.0, unitListingPrice - unitOrderPrice);
@@ -354,17 +364,14 @@ export const verifyPayment = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Order draft not found in database.' });
     }
 
-    // Verify caller ownership if caller is an authenticated customer
+    // Verify caller ownership if caller is an authenticated customer (strict UID matching)
     if (req.user && !req.user.isStaff && !req.user.isAdmin) {
       const callerUserId = (req.user.userId || req.user.uid || '').trim();
-      const callerPhone = normalizePhone(req.user.phoneNumber || '');
-      const orderUserId = (order.userId || order.user_id || '').trim();
-      const orderPhone = normalizePhone(order.userPhone || order.user_phone || order.recipientPhone || order.recipient_phone || '');
+      const orderUserId = (order.uid || order.userId || order.user_id || '').trim();
 
-      const isOwner = (callerUserId && callerUserId === orderUserId) ||
-        (callerPhone && callerPhone === orderPhone);
+      const isOwner = Boolean(callerUserId && callerUserId === orderUserId);
 
-      if (!isOwner && (orderUserId || orderPhone)) {
+      if (!isOwner && orderUserId) {
         return res.status(403).json({
           success: false,
           message: 'Access denied. You do not have permission to verify this order.',
@@ -638,31 +645,35 @@ async function _deductOrderStock(orderDocRef, items, existingOrderData = null) {
       }
     }
 
-    // Update each product's stock in Firestore
+    // Update each product's stock concurrently in Firestore
+    const updatePromises = [];
     for (const [productId, qtyToDeduct] of deductions.entries()) {
-      try {
-        const prodRef = db.collection('products').doc(productId);
-        const prodSnap = await prodRef.get();
-        if (prodSnap.exists) {
-          const prodData = prodSnap.data();
-          const currentStock = parseInt(prodData.stock !== undefined ? prodData.stock : 0, 10);
-          const newStock = Math.max(0, currentStock - qtyToDeduct);
-          const updatePayload = {
-            stock: newStock,
-            updatedAt: new Date().toISOString(),
-          };
-          if (newStock === 0) {
-            updatePayload.availability = 'out of stock';
+      updatePromises.push((async () => {
+        try {
+          const prodRef = db.collection('products').doc(productId);
+          const prodSnap = await prodRef.get();
+          if (prodSnap.exists) {
+            const prodData = prodSnap.data();
+            const currentStock = parseInt(prodData.stock !== undefined ? prodData.stock : 0, 10);
+            const newStock = Math.max(0, currentStock - qtyToDeduct);
+            const updatePayload = {
+              stock: newStock,
+              updatedAt: new Date().toISOString(),
+            };
+            if (newStock === 0) {
+              updatePayload.availability = 'out of stock';
+            }
+            await prodRef.update(updatePayload);
+            console.log(`[Stock Deduction] Product ${productId} stock updated: ${currentStock} -> ${newStock} (-${qtyToDeduct})`);
+          } else {
+            console.warn(`[Stock Deduction] Product ${productId} not found in database.`);
           }
-          await prodRef.update(updatePayload);
-          console.log(`[Stock Deduction] Product ${productId} stock updated: ${currentStock} -> ${newStock} (-${qtyToDeduct})`);
-        } else {
-          console.warn(`[Stock Deduction] Product ${productId} not found in database.`);
+        } catch (prodErr) {
+          console.error(`[Stock Deduction] Error updating stock for product ${productId}:`, prodErr);
         }
-      } catch (prodErr) {
-        console.error(`[Stock Deduction] Error updating stock for product ${productId}:`, prodErr);
-      }
+      })());
     }
+    await Promise.all(updatePromises);
 
     // Mark stock as deducted on the order document
     if (orderDocRef) {
@@ -718,29 +729,35 @@ async function _restoreOrderStock(orderDocRef, items, existingOrderData = null) 
       }
     }
 
-    // Update each product's stock in Firestore
+    // Update each product's stock concurrently in Firestore
+    const restorePromises = [];
     for (const [productId, qtyToRestore] of restorations.entries()) {
-      try {
-        const prodRef = db.collection('products').doc(productId);
-        const prodSnap = await prodRef.get();
-        if (prodSnap.exists) {
-          const prodData = prodSnap.data();
-          const currentStock = parseInt(prodData.stock !== undefined ? prodData.stock : 0, 10);
-          const newStock = currentStock + qtyToRestore;
-          const updatePayload = {
-            stock: newStock,
-            updatedAt: new Date().toISOString(),
-          };
-          if (newStock > 0 && prodData.availability === 'out of stock') {
-            updatePayload.availability = 'available';
+      restorePromises.push((async () => {
+        try {
+          const prodRef = db.collection('products').doc(productId);
+          const prodSnap = await prodRef.get();
+          if (prodSnap.exists) {
+            const prodData = prodSnap.data();
+            const currentStock = parseInt(prodData.stock !== undefined ? prodData.stock : 0, 10);
+            const newStock = currentStock + qtyToRestore;
+            const updatePayload = {
+              stock: newStock,
+              updatedAt: new Date().toISOString(),
+            };
+            if (newStock > 0 && prodData.availability === 'out of stock') {
+              updatePayload.availability = 'available';
+            }
+            await prodRef.update(updatePayload);
+            console.log('[Stock Restoration] Product ' + productId + ' stock restored: ' + currentStock + ' -> ' + newStock + ' (+' + qtyToRestore + ')');
+          } else {
+            console.warn('[Stock Restoration] Product ' + productId + ' not found in database.');
           }
-          await prodRef.update(updatePayload);
-          console.log(`[Stock Restoration] Product ${productId} stock restored: ${currentStock} -> ${newStock} (+${qtyToRestore})`);
+        } catch (prodErr) {
+          console.error('[Stock Restoration] Error restoring stock for product ' + productId + ':', prodErr);
         }
-      } catch (prodErr) {
-        console.error(`[Stock Restoration] Error restoring stock for product ${productId}:`, prodErr);
-      }
+      })());
     }
+    await Promise.all(restorePromises);
 
     // Mark stock as restored (stockDeducted: false) on the order document
     if (orderDocRef) {
@@ -845,16 +862,19 @@ export const getOrdersByIds = async (req, res) => {
     const isStaff = Boolean(req.user?.isStaff || req.user?.isAdmin);
     const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
 
-    for (const id of orderIds) {
-      const docSnap = await db.collection('orders').doc(id).get();
-      if (docSnap.exists) {
-        const data = docSnap.data();
-        if (isStaff) {
-          completedOrders.push(data);
-        } else {
-          const orderUserId = (data.uid || data.userId || data.user_id || '').trim();
-          if (callerUserId && callerUserId === orderUserId) {
+    if (db && orderIds.length > 0) {
+      const docRefs = orderIds.map(id => db.collection('orders').doc(id));
+      const snaps = await db.getAll(...docRefs);
+      for (const docSnap of snaps) {
+        if (docSnap.exists) {
+          const data = docSnap.data();
+          if (isStaff) {
             completedOrders.push(data);
+          } else {
+            const orderUserId = (data.uid || data.userId || data.user_id || '').trim();
+            if (callerUserId && callerUserId === orderUserId) {
+              completedOrders.push(data);
+            }
           }
         }
       }
@@ -905,7 +925,7 @@ export const getInvoice = async (req, res) => {
     if (!req.user?.isStaff && !req.user?.isAdmin) {
       const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
       const callerPhone = normalizePhone(req.user?.phoneNumber || '');
-      const orderUserId = (order.userId || order.user_id || '').trim();
+      const orderUserId = (order.uid || order.userId || order.user_id || '').trim();
       const orderPhone = normalizePhone(order.userPhone || order.user_phone || '');
       const recipientPhone = normalizePhone(order.deliveryDetails?.recipientPhone || order.recipientPhone || order.recipient_phone || '');
 
@@ -951,7 +971,7 @@ export const getOrderStatus = async (req, res) => {
     if (!req.user?.isStaff && !req.user?.isAdmin) {
       const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
       const callerPhone = normalizePhone(req.user?.phoneNumber || '');
-      const orderUserId = (orderData.userId || orderData.user_id || '').trim();
+      const orderUserId = (orderData.uid || orderData.userId || orderData.user_id || '').trim();
       const orderPhone = normalizePhone(orderData.userPhone || orderData.user_phone || '');
       const recipientPhone = normalizePhone(orderData.deliveryDetails?.recipientPhone || orderData.recipientPhone || orderData.recipient_phone || '');
 
@@ -983,6 +1003,9 @@ export const getOrderStatus = async (req, res) => {
  * GET /api/orders/mock-checkout/:orderId
  */
 export const getMockCheckout = async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).send('<h1>Not Found</h1>');
+  }
   const { orderId } = req.params;
   try {
     const docSnap = await db.collection('orders').doc(orderId).get();
@@ -1092,6 +1115,9 @@ export const getMockCheckout = async (req, res) => {
  * GET /api/orders/callback
  */
 export const paymentCallback = async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).send('<h1>Forbidden: Callback simulation is disabled in production</h1>');
+  }
   const {
     razorpay_payment_id,
     razorpay_payment_link_id,
@@ -1110,7 +1136,7 @@ export const paymentCallback = async (req, res) => {
       return res.status(404).send('<h1>Order not found</h1>');
     }
 
-    if (isSimulated === 'true' || !razorpay || razorpay_signature === 'simulated_signature_ok') {
+    if (isSimulated === 'true' || razorpay_signature === 'simulated_signature_ok') {
       await docRef.update({
         payment_status: 'paid',
         paymentStatus: 'PAID',
@@ -1341,75 +1367,122 @@ export const formatOrderDocument = (doc, req) => {
 export const getAllOrders = async (req, res) => {
   try {
     const isStaff = Boolean(req.user?.isStaff || req.user?.isAdmin);
+    const page = Math.max(1, parseInt(req.query?.page, 10) || 1);
+    const limit = Math.max(1, Math.min(100, parseInt(req.query?.limit, 10) || 10));
+    const cursor = (req.query?.cursor || '').trim();
     let snapshot;
+    let total = 0;
     const query = db.collection('orders');
 
     if (isStaff) {
-      // Staff / Admin: allowed to retrieve all orders with optional filtering
-      const { userId, userPhone, phoneNumber } = req.query || {};
+      // Staff / Admin: allowed to retrieve all orders with optional filtering & pagination
+      const { userId, userPhone, phoneNumber, status } = req.query || {};
       const targetPhone = (userPhone || phoneNumber || '').trim();
       const targetUserId = (userId || '').trim();
 
-      if (targetUserId) {
-        try {
-          snapshot = await query.where('userId', '==', targetUserId).orderBy('createdAt', 'desc').get();
-        } catch (_) {
-          snapshot = await query.where('userId', '==', targetUserId).get();
-        }
-      } else if (targetPhone) {
-        try {
-          snapshot = await query.where('userPhone', '==', targetPhone).orderBy('createdAt', 'desc').get();
-        } catch (_) {
-          snapshot = await query.where('userPhone', '==', targetPhone).get();
-        }
+      let staffBaseQuery = query;
 
-        if (!snapshot || snapshot.empty) {
-          try {
-            const recSnap = await query.where('deliveryDetails.recipientPhone', '==', targetPhone).get();
-            if (!recSnap.empty) snapshot = recSnap;
-          } catch (_) { }
+      if (targetUserId) {
+        staffBaseQuery = staffBaseQuery.where('userId', '==', targetUserId);
+      } else if (targetPhone) {
+        staffBaseQuery = staffBaseQuery.where('userPhone', '==', targetPhone);
+      }
+
+      if (status && status !== 'ALL') {
+        staffBaseQuery = staffBaseQuery.where('orderStatus', '==', status);
+      }
+
+      // 1. Get total count using Firestore aggregation (ultra-low read cost: 1 read / 1000 docs)
+      try {
+        const countSnap = await staffBaseQuery.count().get();
+        total = countSnap.data().count;
+      } catch (cntErr) {
+        console.warn('[Staff Orders Count Notice]:', cntErr.message);
+      }
+
+      // 2. Fetch paginated documents
+      try {
+        let fetchQ = staffBaseQuery.orderBy('createdAt', 'desc');
+        if (cursor) {
+          fetchQ = fetchQ.startAfter(cursor).limit(limit);
+        } else {
+          fetchQ = fetchQ.offset((page - 1) * limit).limit(limit);
         }
-      } else {
+        snapshot = await fetchQ.get();
+      } catch (err) {
+        console.warn('[Staff Orders Paginated Query Fallback]:', err.message);
         try {
-          snapshot = await query.orderBy('createdAt', 'desc').get();
+          snapshot = await staffBaseQuery.limit(limit).get();
         } catch (_) {
-          snapshot = await query.get();
+          snapshot = await staffBaseQuery.get();
         }
+      }
+
+      // If user filtered by recipientPhone fallback when userPhone yielded empty
+      if ((!snapshot || snapshot.empty) && targetPhone) {
+        try {
+          const recSnap = await query.where('deliveryDetails.recipientPhone', '==', targetPhone).limit(limit).get();
+          if (!recSnap.empty) {
+            snapshot = recSnap;
+            total = recSnap.size;
+          }
+        } catch (_) { }
       }
     } else {
       // Authenticated Customer: strictly isolated to own identity by verified UID
       const callerUserId = (req.user?.userId || req.user?.uid || req.query?.uid || req.query?.userId || '').trim();
 
       if (!callerUserId) {
-        return res.status(200).json({ success: true, orders: [] });
+        return res.status(200).json({
+          success: true,
+          orders: [],
+          total: 0,
+          totalPages: 1,
+          currentPage: 1,
+          limit,
+          pagination: { total: 0, page: 1, limit, totalPages: 1, hasNextPage: false, hasPrevPage: false }
+        });
       }
 
-      const matchedDocs = new Map();
-
-      // Query exclusively by caller's UID across matching fields (uid, userId, user_id)
+      // 1. Fast count for customer's orders
       try {
+        const countSnap = await query.where('uid', '==', callerUserId).count().get();
+        total = countSnap.data().count;
+      } catch (cntErr) {
+        console.warn('[Customer Orders Count Notice]:', cntErr.message);
+      }
+
+      // 2. Fetch paginated slice using cursor or offset
+      try {
+        let custQ = query.where('uid', '==', callerUserId).orderBy('createdAt', 'desc');
+        if (cursor) {
+          custQ = custQ.startAfter(cursor).limit(limit);
+        } else {
+          custQ = custQ.offset((page - 1) * limit).limit(limit);
+        }
+        snapshot = await custQ.get();
+      } catch (idxErr) {
+        console.warn('[Customer Orders Index Notice - using in-memory pagination fallback]:', idxErr.message);
+        // Fallback: If composite index (uid ASC, createdAt DESC) is not yet active,
+        // fetch by uid, sort in memory, and slice cleanly so user never experiences error.
         const uidSnap = await query.where('uid', '==', callerUserId).get();
-        uidSnap.docs.forEach(d => matchedDocs.set(d.id, d));
-      } catch (_) { }
-
-      try {
-        const uSnap = await query.where('userId', '==', callerUserId).get();
-        uSnap.docs.forEach(d => matchedDocs.set(d.id, d));
-      } catch (_) { }
-
-      try {
-        const uSnap2 = await query.where('user_id', '==', callerUserId).get();
-        uSnap2.docs.forEach(d => matchedDocs.set(d.id, d));
-      } catch (_) { }
-
-      snapshot = { docs: Array.from(matchedDocs.values()) };
+        const allDocs = uidSnap.docs || [];
+        total = allDocs.length;
+        allDocs.sort((a, b) => {
+          const ca = a.data()?.createdAt || '';
+          const cb = b.data()?.createdAt || '';
+          return cb.localeCompare(ca);
+        });
+        const offset = (page - 1) * limit;
+        snapshot = { docs: allDocs.slice(offset, offset + limit) };
+      }
     }
 
     if (!snapshot) {
       snapshot = { docs: [] };
     }
 
-    const mapped = snapshot.docs.map(doc => formatOrderDocument(doc, req));
+    const mapped = (snapshot.docs || []).map(doc => formatOrderDocument(doc, req));
 
     const filteredOrders = mapped.filter((order) => {
       const pm = (order.paymentMethod || '').toLowerCase();
@@ -1423,11 +1496,29 @@ export const getAllOrders = async (req, res) => {
       return true;
     });
 
+    // Make sure the current slice is properly sorted newest first
     filteredOrders.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+
+    const effectiveTotal = Math.max(total, filteredOrders.length);
+    const totalPages = Math.max(1, Math.ceil(effectiveTotal / limit));
+    const lastDoc = snapshot.docs && snapshot.docs.length > 0 ? snapshot.docs[snapshot.docs.length - 1] : null;
+    const nextCursor = lastDoc ? (typeof lastDoc.data === 'function' ? (lastDoc.data()?.createdAt || lastDoc.id) : (lastDoc.createdAt || lastDoc.id)) : null;
+
+    const paginationMeta = {
+      total: effectiveTotal,
+      page,
+      limit,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPrevPage: page > 1,
+      nextCursor
+    };
 
     return res.status(200).json({
       success: true,
-      orders: filteredOrders
+      orders: filteredOrders,
+      ...paginationMeta,
+      pagination: paginationMeta
     });
   } catch (err) {
     console.error('Error fetching order listings from Firestore:', err);
@@ -1803,34 +1894,28 @@ export const getCustomOrdersForCaller = async (req, res) => {
       return getCustomOrders(req, res);
     }
 
-    // Authenticated Customer: return only own custom orders
-    const callerPhone = normalizePhone(req.user?.phoneNumber || '');
-    const callerEmail = (req.user?.email || '').trim().toLowerCase();
+    // Authenticated Customer: query strictly by UID (saves reading entire collection)
     const callerUserId = (req.user?.userId || req.user?.uid || '').trim();
 
-    if (!callerPhone && !callerEmail && !callerUserId) {
+    if (!callerUserId) {
       return res.status(200).json({ success: true, customOrders: [] });
     }
 
     let snapshot;
     try {
-      snapshot = await db.collection('custom_orders').orderBy('requestedAt', 'desc').get();
+      snapshot = await db.collection('custom_orders')
+        .where('userId', '==', callerUserId)
+        .orderBy('requestedAt', 'desc')
+        .get();
     } catch (_) {
-      snapshot = await db.collection('custom_orders').get();
+      snapshot = await db.collection('custom_orders')
+        .where('userId', '==', callerUserId)
+        .get();
     }
 
-    const docs = snapshot.docs.filter(doc => {
-      const d = doc.data();
-      const dPhone = normalizePhone(d.customerPhone || d.customer_phone || d.phone || '');
-      const dEmail = (d.customerEmail || d.customer_email || '').trim().toLowerCase();
-      const dUser = (d.userId || d.user_id || '').trim();
-
-      return (callerPhone && dPhone && callerPhone === dPhone) ||
-        (callerEmail && dEmail && callerEmail === dEmail) ||
-        (callerUserId && dUser && callerUserId === dUser);
-    });
-
+    const docs = snapshot.docs || [];
     const mapped = docs.map(doc => formatCustomOrderDocument(doc, req));
+    mapped.sort((a, b) => (b.requestedAt || '').localeCompare(a.requestedAt || ''));
     return res.status(200).json({ success: true, customOrders: mapped });
   } catch (err) {
     console.error('Error getting custom orders for caller:', err);
@@ -1918,9 +2003,8 @@ export const updateCustomOrder = async (req, res) => {
     if (calculatedCost !== undefined) updates.calculatedCost = parseFloat(calculatedCost);
 
     await docRef.update(updates);
-    const updatedSnap = await docRef.get();
 
-    return res.status(200).json({ success: true, message: 'Custom order updated successfully!', customOrder: updatedSnap.data() });
+    return res.status(200).json({ success: true, message: 'Custom order updated successfully!', customOrder: { ...docSnap.data(), ...updates } });
   } catch (err) {
     console.error('Error updating custom order in Firestore:', err);
     return res.status(500).json({ success: false, message: 'Failed to update custom order.', error: err.message });
@@ -1977,7 +2061,8 @@ export const createRequestedOrder = async (req, res) => {
 
   const reqDoc = {
     id,
-    customerName,
+    userId: req.user?.userId || req.user?.uid || '',
+    customerName:
     customerEmail,
     productId,
     productTitle,
@@ -2014,9 +2099,8 @@ export const updateRequestedOrder = async (req, res) => {
     }
 
     await docRef.update({ status });
-    const updatedSnap = await docRef.get();
 
-    return res.status(200).json({ success: true, message: 'Requested order status updated!', requestedOrder: updatedSnap.data() });
+    return res.status(200).json({ success: true, message: 'Requested order status updated!', requestedOrder: { ...docSnap.data(), status } });
   } catch (err) {
     console.error('Error updating requested order in Firestore:', err);
     return res.status(500).json({ success: false, message: 'Failed to update requested order status.', error: err.message });

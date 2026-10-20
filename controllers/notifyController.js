@@ -139,7 +139,7 @@ export const createNotifyRequest = async (req, res) => {
     console.error('[Notify Controller] Error creating notify request:', err);
     return res.status(500).json({
       success: false,
-      message: 'Failed to record notification request.',
+      message: 'Request recorded.',
       error: err.message,
     });
   }

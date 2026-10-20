@@ -32,7 +32,7 @@ const router = express.Router();
 
 // --- Regular Standard Orders & Payments ---
 router.post('/', requireAuth, createOrder);
-router.post('/create-order', requireAuth, createOrder);
+router.post('/create-order', requireAuth, createOrder); // Alias for payment clients
 router.get('/', requireAuth, getAllOrders); // Authenticated customer (own orders) or staff (all orders)
 router.post('/verify', requireAuth, verifyPayment);
 router.post('/webhook', handleWebhook);
@@ -51,7 +51,7 @@ router.put('/custom/:id', requireAdminOrStaff, updateCustomOrder); // Staff upda
 
 // --- Requested Orders ---
 router.get('/requested/all', requireAdminOrStaff, getRequestedOrders); // Admin / staff only
-router.post('/requested', createRequestedOrder); // Submit new out-of-stock request
+router.post('/requested', requireAuth, createRequestedOrder); // Authenticated request submission
 router.put('/requested/:id', requireAdminOrStaff, updateRequestedOrder); // Staff update
 
 // --- Operational updates (Admin & Authorized Staff only) ---
