@@ -1,23 +1,7 @@
 import jwt from 'jsonwebtoken';
-import { createRemoteJWKSet, jwtVerify } from 'jose';
 import db, { admin, FieldValue } from '../config/db.js';
 import { findUserDoc } from './reminderController.js';
-import { normalizePhone } from '../middleware/authMiddleware.js';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'fs_org_jwt_secret_change_in_prod_2024';
-
-const GOOGLE_JWKS = createRemoteJWKSet(
-  new URL('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com')
-);
-
-async function verifyEdgeFirebaseIdToken(token) {
-  const projectId = process.env.FIREBASE_PROJECT_ID || 'flower-studio-37861';
-  const { payload } = await jwtVerify(token, GOOGLE_JWKS, {
-    issuer: `https://securetoken.google.com/${projectId}`,
-    audience: projectId,
-  });
-  return payload;
-}
+import { normalizePhone, verifyFirebaseIdToken, JWT_SECRET } from '../middleware/authMiddleware.js';
 
 /**
  * 1. Verify Firebase ID Token
@@ -40,11 +24,7 @@ export const verifyFirebaseToken = async (req, res) => {
 
     if (idToken) {
       try {
-        if (admin && typeof admin.auth === 'function') {
-          decodedToken = await admin.auth().verifyIdToken(idToken);
-        } else {
-          decodedToken = await verifyEdgeFirebaseIdToken(idToken);
-        }
+        decodedToken = await verifyFirebaseIdToken(idToken);
         if (decodedToken?.phone_number) {
           extractedPhone = decodedToken.phone_number;
         }
@@ -151,6 +131,7 @@ export const verifyFirebaseToken = async (req, res) => {
         }
       }
 
+      // Check legacy email document for migration (only runs if an existing document was found)
       const cleanEmail = (email || decodedToken?.email || '').trim();
       if (userSnap.exists && cleanEmail && cleanEmail !== docId) {
         try {
@@ -173,38 +154,6 @@ export const verifyFirebaseToken = async (req, res) => {
             }
           }
         } catch (_) {}
-      }
-
-      // If Firebase User UID is known, merge entry indexed by User UID
-      if (firebaseUid && docId !== firebaseUid) {
-        const uidRef = db.collection('users').doc(firebaseUid);
-        const uidSnap = await uidRef.get();
-        if (!uidSnap.exists) {
-          await uidRef.set({
-            uid: firebaseUid,
-            phoneNumber: cleanPhone,
-            provider: cleanPhone ? 'phone' : 'google',
-            fullName: userProfile.fullName || '',
-            email: userProfile.email || '',
-            alternateNumber: '',
-            addresses: userProfile.addresses || [],
-            reminders: userProfile.reminders || [],
-            orders: userProfile.orders || [],
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          });
-          console.log(`[Firebase Auth Sync] Created UID user entry in Firestore for ${firebaseUid}`);
-        } else {
-          const uidUpdate = { updatedAt: new Date().toISOString() };
-          if (!uidSnap.data()?.uid) {
-            uidUpdate.uid = firebaseUid;
-          }
-          if (FieldValue && typeof FieldValue.delete === 'function') {
-            uidUpdate.id = FieldValue.delete();
-            uidUpdate.address = FieldValue.delete();
-          }
-          await uidRef.update(uidUpdate);
-        }
       }
     }
 
@@ -289,18 +238,10 @@ export const getUserProfile = async (req, res) => {
       }
     }
 
-    return res.status(200).json({
-      success: true,
-      user: {
-        uid: req.user?.uid || '',
-        fullName: 'Flower Customer',
-        phoneNumber: cleanPhone,
-        email: `${cleanPhone.replace(/\D/g, '')}@example.com`,
-        alternateNumber: '',
-        addresses: [],
-        reminders: [],
-        orders: []
-      }
+    return res.status(404).json({
+      success: false,
+      message: 'User profile not found.',
+      code: 'NOT_FOUND'
     });
 
   } catch (error) {
@@ -428,145 +369,4 @@ export const updateUserProfile = async (req, res) => {
       error: error.message
     });
   }
-};
-
-/**
- * 4. Add Order Details to User Profile in Firestore
- */
-export const addUserOrder = async (req, res) => {
-  const {
-    phoneNumber,
-    orderId,
-    productId,
-    quantity,
-    addons,
-    address,
-    paymentDetails,
-    recipientNumber,
-    messageOnCard,
-    messageOnCake,
-    orderStatus
-  } = req.body;
-
-  if (!phoneNumber || !orderId || !productId) {
-    return res.status(400).json({
-      success: false,
-      message: 'phoneNumber, orderId, and productId are required.'
-    });
-  }
-
-  const cleanPhone = phoneNumber.trim();
-
-  const formattedAddons = Array.isArray(addons)
-    ? addons.map(item => ({
-        productId: item.productId || item.product_id || '',
-        quantity: parseInt(item.quantity || 1, 10)
-      }))
-    : [];
-
-  const addonProductIds = formattedAddons.map(a => a.productId).filter(Boolean);
-
-  const orderEntry = {
-    orderId,
-    productId,
-    quantity: parseInt(quantity || 1, 10),
-    addons: formattedAddons,
-    addonProductIds: addonProductIds,
-    address: {
-      houseNo: address?.houseNo || '',
-      streetName: address?.streetName || '',
-      district: address?.district || '',
-      state: address?.state || '',
-      pincode: address?.pincode || '',
-      addressType: address?.addressType || 'Home'
-    },
-    paymentDetails: {
-      method: paymentDetails?.method || 'ONLINE',
-      status: paymentDetails?.status || 'pending',
-      transactionId: paymentDetails?.transactionId || null,
-      amount: parseFloat(paymentDetails?.amount || 0.0)
-    },
-    recipientNumber: recipientNumber || cleanPhone,
-    messageOnCard: messageOnCard || '',
-    messageOnCake: messageOnCake || '',
-    orderStatus: orderStatus || 'pending',
-    createdAt: new Date().toISOString()
-  };
-
-  try {
-    if (db) {
-      const userRef = db.collection('users').doc(cleanPhone);
-      const userSnap = await userRef.get();
-
-      if (userSnap.exists) {
-        const existingOrders = userSnap.data().orders || [];
-        await userRef.update({
-          orders: [orderEntry, ...existingOrders],
-          updatedAt: new Date().toISOString()
-        });
-      }
-    }
-
-    return res.status(201).json({
-      success: true,
-      message: 'Order details successfully saved to user profile.',
-      order: orderEntry
-    });
-
-  } catch (error) {
-    console.error('Error adding order details to user profile:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to add order to user profile.',
-      error: error.message
-    });
-  }
-};
-
-/**
- * 5. Legacy Auth Login Bypass
- */
-export const login = async (req, res) => {
-  const { email, password } = req.body;
-
-  if (!email || !password) {
-    return res.status(400).json({
-      success: false,
-      message: 'Please provide email and password.'
-    });
-  }
-
-  return res.status(200).json({
-    success: true,
-    token: 'simulated-jwt-token-bypass-key',
-    user: {
-      email: email,
-      name: email.split('@')[0],
-      role: 'admin'
-    }
-  });
-};
-
-/**
- * Legacy OTP Stubs (Maintained for backwards compatibility)
- */
-export const sendOtp = async (req, res) => {
-  return res.status(200).json({
-    success: true,
-    message: 'Firebase Phone Authentication is active. Please authenticate via Firebase Auth.'
-  });
-};
-
-export const verifyOtp = async (req, res) => {
-  return res.status(200).json({
-    success: true,
-    message: 'Firebase Phone Authentication is active. Please send Firebase ID Token to /api/auth/verify-firebase-token.'
-  });
-};
-
-export const resendOtp = async (req, res) => {
-  return res.status(200).json({
-    success: true,
-    message: 'Firebase Phone Authentication is active.'
-  });
 };
