@@ -42,7 +42,7 @@ function cleanPrivateKey(key) {
 /**
  * Resolve service account credentials across Edge variables, Env vars, or local file
  */
-function getServiceAccount() {
+export function getServiceAccount() {
   // 1. Single JSON Environment Variable (FIREBASE_SERVICE_ACCOUNT)
   if (process.env.FIREBASE_SERVICE_ACCOUNT) {
     try {

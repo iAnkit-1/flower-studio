@@ -329,7 +329,6 @@ export const updateUserProfile = async (req, res) => {
         }
         await userRef.update(profilePayload);
       } else {
-        profilePayload.orders = [];
         profilePayload.addresses = Array.isArray(addresses) ? addresses : [];
         profilePayload.reminders = Array.isArray(reminders) ? reminders : [];
         profilePayload.createdAt = new Date().toISOString();

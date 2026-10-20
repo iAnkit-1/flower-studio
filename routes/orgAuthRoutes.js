@@ -4,6 +4,7 @@ import {
   orgLogout,
   getStaffMe,
   verifyOrgToken,
+  getStaffFirebaseToken,
   getAllStaff,
   createStaff,
   updateStaff,
@@ -23,8 +24,10 @@ router.post('/verify-token',      verifyOrgToken);
 router.post('/auth/verify-token', verifyOrgToken);
 
 // Protected — requires valid JWT
-router.get('/me',      verifyJWT, getStaffMe);
-router.get('/auth/me', verifyJWT, getStaffMe);
+router.get('/me',                  verifyJWT, getStaffMe);
+router.get('/auth/me',             verifyJWT, getStaffMe);
+router.get('/firebase-token',      verifyJWT, getStaffFirebaseToken);
+router.get('/auth/firebase-token', verifyJWT, getStaffFirebaseToken);
 
 // Admin-only Staff Management
 router.get('/staff',              requireAdmin, getAllStaff);

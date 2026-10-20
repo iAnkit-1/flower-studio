@@ -1,11 +1,45 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import db from '../config/db.js';
+import { importPKCS8, SignJWT } from 'jose';
+import db, { getServiceAccount } from '../config/db.js';
 
 import { JWT_SECRET } from '../middleware/authMiddleware.js';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
 const STAFF_COLLECTION = 'staff_users';
+
+/**
+ * Mint a Firebase Auth Custom Token with staff role & claims for Firestore security rules
+ */
+export async function createStaffFirebaseToken(uid, role = 'admin', email = '') {
+  const sa = getServiceAccount();
+  if (!sa || !sa.private_key || !sa.client_email) {
+    throw new Error('Service account credentials not configured');
+  }
+
+  const cleanKey = sa.private_key.replace(/\\n/g, '\n');
+  const privateKey = await importPKCS8(cleanKey, 'RS256');
+  const now = Math.floor(Date.now() / 1000);
+
+  const token = await new SignJWT({
+    uid: String(uid),
+    email: email || '',
+    claims: {
+      role: (role || 'admin').toLowerCase(),
+      isStaff: true,
+      email: email || '',
+    },
+  })
+    .setProtectedHeader({ alg: 'RS256', typ: 'JWT' })
+    .setIssuer(sa.client_email)
+    .setSubject(sa.client_email)
+    .setAudience('https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit')
+    .setIssuedAt(now)
+    .setExpirationTime(now + 3600)
+    .sign(privateKey);
+
+  return token;
+}
 
 /**
  * POST /api/org/auth/login
@@ -75,10 +109,19 @@ export const orgLogin = async (req, res) => {
     // 5. Update last login timestamp
     await staffDoc.ref.update({ lastLoginAt: new Date().toISOString() });
 
+    // 6. Generate Firebase Custom Token for Firestore client access
+    let firebaseToken = null;
+    try {
+      firebaseToken = await createStaffFirebaseToken(staffDoc.id, staffData.role, staffData.email);
+    } catch (tokErr) {
+      console.warn('[orgLogin] Firebase token creation notice:', tokErr.message);
+    }
+
     return res.status(200).json({
       success: true,
       message: `Welcome back, ${staffData.name}!`,
       token,
+      firebaseToken,
       staff: {
         email: staffData.email,
         name: staffData.name,
@@ -171,8 +214,14 @@ export const verifyOrgToken = async (req, res) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
+    let firebaseToken = null;
+    try {
+      firebaseToken = await createStaffFirebaseToken(decoded.email, decoded.role, decoded.email);
+    } catch (_) {}
+
     return res.status(200).json({
       success: true,
+      firebaseToken,
       staff: {
         email: decoded.email,
         name: decoded.name,
@@ -186,6 +235,24 @@ export const verifyOrgToken = async (req, res) => {
       message: err.name === 'TokenExpiredError' ? 'Session expired.' : 'Invalid token.',
       code
     });
+  }
+};
+
+/**
+ * GET /api/org/auth/firebase-token
+ * Authenticated endpoint to fetch a fresh Firebase custom token for staff
+ */
+export const getStaffFirebaseToken = async (req, res) => {
+  try {
+    const staff = req.staff || req.user;
+    if (!staff) {
+      return res.status(401).json({ success: false, message: 'Unauthorized.' });
+    }
+    const firebaseToken = await createStaffFirebaseToken(staff.email, staff.role, staff.email);
+    return res.status(200).json({ success: true, firebaseToken });
+  } catch (err) {
+    console.error('[getStaffFirebaseToken] Error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to mint Firebase token.', error: err.message });
   }
 };
 

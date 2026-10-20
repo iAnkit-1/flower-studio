@@ -276,12 +276,34 @@ export async function sendStaffOrderAlert({
               type: 'NEW_ORDER',
               soundType: 'buzzer',
               click_action: '/orders',
+              title: String(title),
+              body: String(body),
+              customerName: String(customerName || ''),
+              customerPhone: String(customerPhone || ''),
+              grandTotal: String(grandTotal || '0'),
+              paymentMethod: String(paymentMethod || 'COD'),
             },
             android: {
               priority: 'high',
               notification: {
                 channel_id: 'flower_studio_buzzer_channel',
                 sound: 'buzzer',
+              },
+            },
+            webpush: {
+              headers: {
+                Urgency: 'high',
+              },
+              notification: {
+                title,
+                body,
+                icon: '/logo.png',
+                badge: '/logo.png',
+                tag: String(orderId),
+                requireInteraction: true,
+              },
+              fcm_options: {
+                link: '/orders',
               },
             },
           })
@@ -407,6 +429,24 @@ export async function sendStaffSupportAlert({
               category: String(category),
               priority: String(priority),
               click_action: '/support',
+              title: String(title),
+              body: String(body),
+              customerName: String(customerName || ''),
+            },
+            webpush: {
+              headers: {
+                Urgency: 'high',
+              },
+              notification: {
+                title,
+                body,
+                icon: '/logo.png',
+                badge: '/logo.png',
+                tag: String(ticketId),
+              },
+              fcm_options: {
+                link: '/support',
+              },
             },
           })
         )
