@@ -200,7 +200,7 @@ export async function sendFcmMessage(message) {
 }
 
 /**
- * 1. Send Order Alert to Organization Staff with Buzzer Sound & Save to Notifications History
+ * 1. Send Order Alert to Organization Staff & Save to Notifications History
  */
 export async function sendStaffOrderAlert({
   orderId,
@@ -227,7 +227,7 @@ export async function sendStaffOrderAlert({
       paymentMethod,
       itemsCount: Number(itemsCount),
       isRead: false,
-      soundType: 'buzzer',
+      soundType: 'default',
       createdAt: now,
       updatedAt: now,
     });
@@ -236,7 +236,7 @@ export async function sendStaffOrderAlert({
     console.error('[Notification Service] Error saving notification to Firestore:', fsErr.message);
   }
 
-  // Real-Time SSE to connected Org Web staff tabs (Instant <10ms buzzer, 0 Firestore reads)
+  // Real-Time SSE to connected Org Web staff tabs (Instant <10ms, 0 Firestore reads)
   try {
     broadcastStaffSse('NEW_ORDER', {
       orderId: String(orderId),
@@ -247,7 +247,7 @@ export async function sendStaffOrderAlert({
       grandTotal: Number(grandTotal),
       paymentMethod,
       itemsCount: Number(itemsCount),
-      soundType: 'buzzer',
+      soundType: 'default',
     });
   } catch (sseErr) {
     console.warn('[FCM Service] Notice broadcasting staff SSE:', sseErr.message);
@@ -261,21 +261,21 @@ export async function sendStaffOrderAlert({
       data: {
         orderId: String(orderId),
         type: 'NEW_ORDER',
-        soundType: 'buzzer',
+        soundType: 'default',
         click_action: '/orders',
       },
       android: {
         priority: 'high',
         notification: {
-          channel_id: 'flower_studio_buzzer_channel',
-          sound: 'buzzer',
+          channel_id: 'flower_studio_orders_channel',
+          sound: 'default',
           default_vibrate_timings: true,
         },
       },
       apns: {
         payload: {
           aps: {
-            sound: 'buzzer.caf',
+            sound: 'default',
             badge: 1,
           },
         },
@@ -298,7 +298,7 @@ export async function sendStaffOrderAlert({
             data: {
               orderId: String(orderId),
               type: 'NEW_ORDER',
-              soundType: 'buzzer',
+              soundType: 'default',
               click_action: '/orders',
               title: String(title),
               body: String(body),
@@ -310,8 +310,8 @@ export async function sendStaffOrderAlert({
             android: {
               priority: 'high',
               notification: {
-                channel_id: 'flower_studio_buzzer_channel',
-                sound: 'buzzer',
+                channel_id: 'flower_studio_orders_channel',
+                sound: 'default',
               },
             },
             webpush: {

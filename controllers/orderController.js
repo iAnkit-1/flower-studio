@@ -307,7 +307,7 @@ export const createOrder = async (req, res) => {
       await _deductOrderStock(orderDocRef, validatedItems, { stockDeducted: false });
       console.log(`COD Order Placed Successfully: ${orderId}`);
 
-      // Trigger Staff Push Notification with Buzzer Sound & save to notifications history
+      // Trigger Staff Push Notification & save to notifications history
       sendStaffOrderAlert({
         orderId,
         customerName: recipient_name || req.user?.name || 'Customer',
@@ -469,7 +469,7 @@ export const verifyPayment = async (req, res) => {
 
     console.log(`Order ${orderId} verified and successfully stored in orders collection!`);
 
-    // Trigger Staff Push Notification with Buzzer Sound for confirmed paid order
+    // Trigger Staff Push Notification for confirmed paid order
     sendStaffOrderAlert({
       orderId,
       customerName: confirmedOrder.recipient_name || confirmedOrder.recipientName || confirmedOrder.customerName || 'Customer',
