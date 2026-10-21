@@ -6,6 +6,38 @@ import { findUserDoc } from '../controllers/reminderController.js';
 let cachedAccessToken = null;
 let tokenExpiresAt = 0;
 
+// In-memory staff tokens cache to guarantee 0 Firestore reads on repeated order push alerts
+let cachedStaffTokens = null;
+let staffTokensCachedAt = 0;
+const STAFF_TOKENS_TTL_MS = 10 * 60 * 1000; // 10 minutes cache
+
+export function invalidateStaffTokensCache() {
+  cachedStaffTokens = null;
+  staffTokensCachedAt = 0;
+}
+
+export async function getCachedStaffTokens() {
+  const now = Date.now();
+  if (cachedStaffTokens && (now - staffTokensCachedAt) < STAFF_TOKENS_TTL_MS) {
+    return cachedStaffTokens;
+  }
+  try {
+    const staffSnaps = await db.collection('staff_devices').limit(50).get();
+    const tokens = [];
+    staffSnaps.forEach((doc) => {
+      const d = doc.data();
+      if (d.fcmToken) tokens.push(d.fcmToken);
+      if (Array.isArray(d.fcmTokens)) tokens.push(...d.fcmTokens);
+    });
+    cachedStaffTokens = [...new Set(tokens)].filter(Boolean);
+    staffTokensCachedAt = now;
+    return cachedStaffTokens;
+  } catch (err) {
+    console.warn('[FCM Service] Notice reading staff tokens:', err.message);
+    return cachedStaffTokens || [];
+  }
+}
+
 /**
  * Safely format and clean RSA Private Key for OpenSSL / jose compatibility
  */
@@ -254,17 +286,9 @@ export async function sendStaffOrderAlert({
     console.warn('[FCM Service] Notice sending to topic organization_alerts:', fcmErr.message);
   }
 
-  // 2. Also send directly to any staff tokens stored in staff_devices
+  // 2. Also send directly to any staff tokens stored in staff_devices (0 Firestore reads with cache)
   try {
-    const staffSnaps = await db.collection('staff_devices').limit(50).get();
-    const staffTokens = [];
-    staffSnaps.forEach((doc) => {
-      const d = doc.data();
-      if (d.fcmToken) staffTokens.push(d.fcmToken);
-      if (Array.isArray(d.fcmTokens)) staffTokens.push(...d.fcmTokens);
-    });
-
-    const uniqueTokens = [...new Set(staffTokens)].filter(Boolean);
+    const uniqueTokens = await getCachedStaffTokens();
     if (uniqueTokens.length > 0) {
       await Promise.allSettled(
         uniqueTokens.map((t) =>
@@ -405,17 +429,9 @@ export async function sendStaffSupportAlert({
     console.warn('[FCM Service] Notice sending to topic organization_alerts for support ticket:', fcmErr.message);
   }
 
-  // 2. Also send directly to active staff tokens in staff_devices
+  // 2. Also send directly to active staff tokens in staff_devices (0 Firestore reads with cache)
   try {
-    const staffSnaps = await db.collection('staff_devices').limit(50).get();
-    const staffTokens = [];
-    staffSnaps.forEach((doc) => {
-      const d = doc.data();
-      if (d.fcmToken) staffTokens.push(d.fcmToken);
-      if (Array.isArray(d.fcmTokens)) staffTokens.push(...d.fcmTokens);
-    });
-
-    const uniqueTokens = [...new Set(staffTokens)].filter(Boolean);
+    const uniqueTokens = await getCachedStaffTokens();
     if (uniqueTokens.length > 0) {
       await Promise.allSettled(
         uniqueTokens.map((t) =>
@@ -465,6 +481,7 @@ export async function sendCustomerOrderStatusAlert({
   orderId,
   customerUserId,
   customerPhone,
+  customerEmail,
   status,
   customMessage,
 }) {
@@ -526,14 +543,14 @@ export async function sendCustomerOrderStatusAlert({
   // Retrieve customer FCM device tokens for THIS user ONLY using robust findUserDoc
   const targetTokens = [];
   try {
-    const userDocInfo = await findUserDoc(customerUserId, customerPhone);
+    const userDocInfo = await findUserDoc(customerUserId, customerPhone, customerEmail);
     if (userDocInfo && userDocInfo.data) {
       const uData = userDocInfo.data;
       if (uData.fcmToken) targetTokens.push(uData.fcmToken);
       if (Array.isArray(uData.fcmTokens)) targetTokens.push(...uData.fcmTokens);
       console.log(`[FCM Service] Found ${targetTokens.length} token(s) for customer user: ${userDocInfo.id}`);
     } else {
-      console.log(`[FCM Service] findUserDoc found no user profile for ${customerUserId || customerPhone}`);
+      console.log(`[FCM Service] findUserDoc found no user profile for ${customerUserId || customerPhone || customerEmail}`);
     }
   } catch (tokErr) {
     console.warn('[FCM Service] Error fetching customer tokens:', tokErr.message);

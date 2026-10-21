@@ -1438,6 +1438,7 @@ export const updateOrderStatus = async (req, res) => {
       orderId,
       customerUserId: existingData.userId || existingData.user_id || existingData.customerId || existingData.customer_id,
       customerPhone: existingData.userPhone || existingData.user_phone || existingData.recipient_phone || existingData.recipientPhone || existingData.customerPhone || existingData.phone,
+      customerEmail: existingData.userEmail || existingData.user_email || existingData.customerEmail || existingData.email,
       status: targetStatus,
     }).catch((e) => console.warn('[updateOrderStatus Customer Alert Notice]:', e.message));
 
@@ -1603,6 +1604,7 @@ export const updateOrderDeliveryStatus = async (req, res) => {
       orderId,
       customerUserId: currentOrderData.userId || currentOrderData.user_id || currentOrderData.customerId || currentOrderData.customer_id,
       customerPhone: currentOrderData.userPhone || currentOrderData.user_phone || currentOrderData.recipient_phone || currentOrderData.recipientPhone || currentOrderData.customerPhone || currentOrderData.phone,
+      customerEmail: currentOrderData.userEmail || currentOrderData.user_email || currentOrderData.customerEmail || currentOrderData.email,
       status: newStatus,
     }).catch((e) => console.warn('[updateOrderDeliveryStatus Customer Alert Notice]:', e.message));
 

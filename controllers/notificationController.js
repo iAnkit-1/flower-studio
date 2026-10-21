@@ -1,5 +1,5 @@
 import db from '../config/db.js';
-import { sendBroadcastPush } from '../services/fcmService.js';
+import { sendBroadcastPush, invalidateStaffTokensCache } from '../services/fcmService.js';
 import { findUserDoc } from './reminderController.js';
 
 // Connected Server-Sent Events (SSE) clients for real-time staff alerts (Org Web)
@@ -198,6 +198,10 @@ export const registerToken = async (req, res) => {
         platform,
         updatedAt: now,
       }, { merge: true });
+
+      if (typeof invalidateStaffTokensCache === 'function') {
+        invalidateStaffTokensCache();
+      }
 
       return res.status(200).json({ success: true, message: 'Staff device token registered' });
     }
