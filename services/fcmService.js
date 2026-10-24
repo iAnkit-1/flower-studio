@@ -290,9 +290,9 @@ export async function sendStaffOrderAlert({
   try {
     const uniqueTokens = await getCachedStaffTokens();
     if (uniqueTokens.length > 0) {
-      await Promise.allSettled(
-        uniqueTokens.map((t) =>
-          sendFcmMessage({
+      const results = await Promise.allSettled(
+        uniqueTokens.map(async (t) => {
+          const res = await sendFcmMessage({
             token: t,
             notification: { title, body },
             data: {
@@ -311,7 +311,7 @@ export async function sendStaffOrderAlert({
               priority: 'high',
               notification: {
                 channel_id: 'flower_studio_orders_channel',
-                sound: 'default',
+                default_vibrate_timings: true,
               },
             },
             webpush: {
@@ -330,10 +330,22 @@ export async function sendStaffOrderAlert({
                 link: '/orders',
               },
             },
-          })
-        )
+          });
+
+          // Automatically clean up expired or unregistered tokens from database
+          if (!res.success && (res.error === 'NotRegistered' || res.error?.includes?.('not registered') || res.error === 'InvalidArgument')) {
+            try {
+              await db.collection('staff_devices').doc(t.slice(-32)).delete();
+              if (typeof invalidateStaffTokensCache === 'function') {
+                invalidateStaffTokensCache();
+              }
+            } catch (_) {}
+          }
+          return res;
+        })
       );
-      console.log(`[FCM Service] Sent staff direct messages to ${uniqueTokens.length} device(s)`);
+      const successCount = results.filter((r) => r.status === 'fulfilled' && r.value?.success).length;
+      console.log(`[FCM Service] Sent staff direct messages: ${successCount}/${uniqueTokens.length} delivered`);
     }
   } catch (multiErr) {
     console.warn('[FCM Service] Notice sending staff multicast:', multiErr.message);

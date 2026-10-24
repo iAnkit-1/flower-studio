@@ -308,14 +308,18 @@ export const createOrder = async (req, res) => {
       console.log(`COD Order Placed Successfully: ${orderId}`);
 
       // Trigger Staff Push Notification & save to notifications history
-      sendStaffOrderAlert({
-        orderId,
-        customerName: recipient_name || req.user?.name || 'Customer',
-        customerPhone: recipient_phone || req.user?.phoneNumber || '',
-        grandTotal: finalGrandTotal,
-        paymentMethod: 'COD',
-        itemsCount: validatedItems.length,
-      }).catch((e) => console.warn('[createOrder Staff Alert Notice]:', e.message));
+      try {
+        await sendStaffOrderAlert({
+          orderId,
+          customerName: recipient_name || req.user?.name || 'Customer',
+          customerPhone: recipient_phone || req.user?.phoneNumber || '',
+          grandTotal: finalGrandTotal,
+          paymentMethod: 'COD',
+          itemsCount: validatedItems.length,
+        });
+      } catch (alertErr) {
+        console.warn('[createOrder Staff Alert Notice]:', alertErr.message);
+      }
       return res.status(201).json({
         success: true,
         message: 'Order created successfully (COD).',
@@ -470,14 +474,18 @@ export const verifyPayment = async (req, res) => {
     console.log(`Order ${orderId} verified and successfully stored in orders collection!`);
 
     // Trigger Staff Push Notification for confirmed paid order
-    sendStaffOrderAlert({
-      orderId,
-      customerName: confirmedOrder.recipient_name || confirmedOrder.recipientName || confirmedOrder.customerName || 'Customer',
-      customerPhone: confirmedOrder.recipient_phone || confirmedOrder.recipientPhone || confirmedOrder.customerPhone || '',
-      grandTotal: confirmedOrder.grand_total || confirmedOrder.grandTotal || 0,
-      paymentMethod: pMethod,
-      itemsCount: (confirmedOrder.items || []).length,
-    }).catch((e) => console.warn('[verifyPayment Staff Alert Notice]:', e.message));
+    try {
+      await sendStaffOrderAlert({
+        orderId,
+        customerName: confirmedOrder.recipient_name || confirmedOrder.recipientName || confirmedOrder.customerName || 'Customer',
+        customerPhone: confirmedOrder.recipient_phone || confirmedOrder.recipientPhone || confirmedOrder.customerPhone || '',
+        grandTotal: confirmedOrder.grand_total || confirmedOrder.grandTotal || 0,
+        paymentMethod: pMethod,
+        itemsCount: (confirmedOrder.items || []).length,
+      });
+    } catch (alertErr) {
+      console.warn('[verifyPayment Staff Alert Notice]:', alertErr.message);
+    }
     return res.status(200).json({
       success: true,
       message: 'Payment verified successfully and order confirmed.',
@@ -831,14 +839,18 @@ async function _updateOrderInFirestoreByRzpId(razorpayOrderId, updatePayload) {
         await _deductOrderStock(doc.ref, data.items, data);
 
         // Staff order alert for confirmed online order
-        sendStaffOrderAlert({
-          orderId: doc.id,
-          customerName: data.recipient_name || data.recipientName || data.customerName || 'Customer',
-          customerPhone: data.recipient_phone || data.recipientPhone || '',
-          grandTotal: data.grand_total || data.grandTotal || 0,
-          paymentMethod: 'ONLINE',
-          itemsCount: (data.items || []).length,
-        }).catch((e) => console.warn('[Webhook Staff Alert Notice]:', e.message));
+        try {
+          await sendStaffOrderAlert({
+            orderId: doc.id,
+            customerName: data.recipient_name || data.recipientName || data.customerName || 'Customer',
+            customerPhone: data.recipient_phone || data.recipientPhone || '',
+            grandTotal: data.grand_total || data.grandTotal || 0,
+            paymentMethod: 'ONLINE',
+            itemsCount: (data.items || []).length,
+          });
+        } catch (alertErr) {
+          console.warn('[Webhook Staff Alert Notice]:', alertErr.message);
+        }
       } else if (updatePayload.orderStatus === 'CANCELLED' || updatePayload.paymentStatus === 'REFUNDED') {
         await _restoreOrderStock(doc.ref, data.items, data);
       }
@@ -1519,14 +1531,18 @@ export const cancelOrder = async (req, res) => {
     await _restoreOrderStock(docRef, orderData.items, orderData);
 
     // Alert staff about customer cancellation
-    sendStaffOrderAlert({
-      orderId,
-      customerName: orderData.recipient_name || orderData.recipientName || 'Customer',
-      customerPhone: orderData.recipient_phone || orderData.recipientPhone || '',
-      grandTotal: orderData.grand_total || orderData.grandTotal || 0,
-      paymentMethod: orderData.paymentMethod || 'COD',
-      itemsCount: (orderData.items || []).length,
-    }).catch((e) => console.warn('[cancelOrder Staff Alert Notice]:', e.message));
+    try {
+      await sendStaffOrderAlert({
+        orderId,
+        customerName: orderData.recipient_name || orderData.recipientName || 'Customer',
+        customerPhone: orderData.recipient_phone || orderData.recipientPhone || '',
+        grandTotal: orderData.grand_total || orderData.grandTotal || 0,
+        paymentMethod: orderData.paymentMethod || 'COD',
+        itemsCount: (orderData.items || []).length,
+      });
+    } catch (alertErr) {
+      console.warn('[cancelOrder Staff Alert Notice]:', alertErr.message);
+    }
 
     return res.status(200).json({
       success: true,
