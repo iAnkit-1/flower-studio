@@ -261,14 +261,14 @@ export async function sendStaffOrderAlert({
       data: {
         orderId: String(orderId),
         type: 'NEW_ORDER',
-        soundType: 'default',
+        soundType: 'buzzer',
         click_action: '/orders',
       },
       android: {
         priority: 'high',
         notification: {
-          channel_id: 'flower_studio_orders_channel',
-          sound: 'default',
+          channel_id: 'flower_studio_buzzer_channel',
+          sound: 'buzzer',
           default_vibrate_timings: true,
         },
       },
@@ -298,7 +298,7 @@ export async function sendStaffOrderAlert({
             data: {
               orderId: String(orderId),
               type: 'NEW_ORDER',
-              soundType: 'default',
+              soundType: 'buzzer',
               click_action: '/orders',
               title: String(title),
               body: String(body),
@@ -310,7 +310,8 @@ export async function sendStaffOrderAlert({
             android: {
               priority: 'high',
               notification: {
-                channel_id: 'flower_studio_orders_channel',
+                channel_id: 'flower_studio_buzzer_channel',
+                sound: 'buzzer',
                 default_vibrate_timings: true,
               },
             },
