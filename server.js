@@ -30,12 +30,8 @@ const allowedOrigins = [
   'https://www.flowerstudiobypushpraj.com',
   'https://flowerstudiobypushpraj.com',
   'https://flowerstudio.vercel.app',
-  'https://fswebadmin.netlify.app',
-  'http://localhost:3000',
-  'http://localhost:5173',
-  'http://localhost:5174',
-  'http://localhost:8080',
-  'http://localhost:5000',
+  'https://fsadmin.flowerstudiobypushpraj.com',
+  'https://www.fsadmin.flowerstudiobypushpraj.com'
 ];
 
 // Helper to determine if an origin is permitted by CORS
